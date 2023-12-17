@@ -1,15 +1,40 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Formats.Asn1;
+using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using CsvHelper;
 using DnsClient;
+using Serilog;
+
+class DomainCheckResult
+{
+    public string Domain { get; set; }
+    public bool NsMatch { get; set; }
+    public List<string> NsRecords { get; set; }
+    public bool AMatch { get; set; }
+    public List<string> ARecords { get; set; }
+    public bool MxMatch { get; set; }
+    public List<string> MxRecords { get; set; }
+    public bool IsBroken { get; set; }
+}
+
+
 
 class Program
 {
     static async Task Main(string[] args)
     {
-        // Set default DNS server to 8.8.8.8
+        const int batchSize = 100; // You can adjust this number based on your needs
+                                   // Set default DNS server to 8.8.8.8
+    Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .CreateLogger();
+
         IPAddress dnsServerAddress = IPAddress.Parse("8.8.8.8");
 
         // Ask if the user wants to change the DNS server
@@ -27,10 +52,39 @@ class Program
             }
         }
 
-        var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
-        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2" };
+        // Instantiate the LookupClient with the DNS server address
         var client = new LookupClient(dnsServerAddress);
 
+        // Target NS and A records
+        var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
+        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2" };
+
+        // File paths for CSV input and output
+        string inputFilePath = @"c:\techno\domains.csv";  // Path to the CSV file with domains
+        string outputFilePath = @"c:\techno\results.csv"; // Path to save the results
+
+        List<string> domains = ReadDomainsFromCsv(inputFilePath);
+        List<DomainCheckResult> results = new List<DomainCheckResult>();
+
+        int totalDomains = domains.Count;
+        int processedCount = 0;
+
+        foreach (var domain in domains)
+        {
+            processedCount++;
+            int remaining = totalDomains - processedCount;
+
+            Log.Information($"Processing domain {processedCount} of {totalDomains}: {domain}. Remaining: {remaining}");
+
+            var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
+            results.Add(result);
+        }
+
+        Log.Information("All domains processed. Writing results to CSV");
+        ExportResultsToCsv(outputFilePath, results);
+        Log.Information("Export completed successfully");
+
+        // Additional code for manual domain checking (optional)
         while (true)
         {
             Console.Clear();
@@ -44,44 +98,51 @@ class Program
             }
 
             Console.WriteLine($"Checking domain: {domain}");
+            var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
-            // Check and match NS and A records
-            await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
-
-            // Query and display all records
+            // Optional: Display all records for the domain
             await QueryAndDisplayAllRecords(client, domain);
 
             Console.WriteLine("\nPress any key to continue...");
             Console.ReadKey();
+            Log.CloseAndFlush();
         }
     }
 
-    static async Task CheckAndMatchDomain(LookupClient client, string domain, List<string> targetNs, List<string> targetA)
+    static async Task<DomainCheckResult> CheckAndMatchDomain(LookupClient client, string domain, List<string> targetNs, List<string> targetA)
     {
-        var nsResponse = await client.QueryAsync(domain, QueryType.NS);
-        var aResponse = await client.QueryAsync(domain, QueryType.A);
-        var mxResponse = await client.QueryAsync(domain, QueryType.MX);
+        var result = new DomainCheckResult
+        {
+            Domain = domain,
+            NsRecords = new List<string>(),
+            ARecords = new List<string>(),
+            MxRecords = new List<string>(),
+            IsBroken = false
+        };
 
-        var nsRecords = nsResponse.Answers.NsRecords().Select(record => record.NSDName.Value.TrimEnd('.')).ToList();
-        var aRecords = aResponse.Answers.ARecords().Select(record => record.Address.ToString()).ToList();
+        try
+        {
+            var nsResponse = await client.QueryAsync(domain, QueryType.NS);
+            var aResponse = await client.QueryAsync(domain, QueryType.A);
+            var mxResponse = await client.QueryAsync(domain, QueryType.MX);
 
-        // Get MX records and trim the trailing dot
-        var mxRecords = mxResponse.Answers.MxRecords().Select(record => record.Exchange.Value.ToLower().TrimEnd('.')).ToList();
+            result.NsRecords = nsResponse.Answers.NsRecords().Select(r => r.NSDName.Value.TrimEnd('.')).ToList();
+            result.ARecords = aResponse.Answers.ARecords().Select(r => r.Address.ToString()).ToList();
+            result.MxRecords = mxResponse.Answers.MxRecords().Select(r => r.Exchange.Value.ToLower().TrimEnd('.')).ToList();
 
-        // Check NS records
-        var nsMatch = nsRecords.Any(record => targetNs.Contains(record));
-        DisplayMatchResult("NS Record", domain, nsMatch, nsRecords);
+            result.NsMatch = result.NsRecords.Any(r => targetNs.Contains(r));
+            result.AMatch = result.ARecords.Any(r => targetA.Contains(r));
+            result.MxMatch = result.MxRecords.Any(r => r.EndsWith("protection.outlook.com") || r.Contains("ppe-hosted.com") || r.Contains("proofpoint"));
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, $"Failed to query DNS records for {domain}");
+            result.IsBroken = true;
+        }
 
-        // Check A records
-        var aMatch = aRecords.Any(record => targetA.Contains(record));
-        DisplayMatchResult("A Record", domain, aMatch, aRecords);
-
-        // Check MX records for Office 365 or Proofpoint
-        var isOffice365 = mxRecords.Any(record => record.EndsWith("protection.outlook.com"));
-        var isProofpoint = mxRecords.Any(record => record.Contains("ppe-hosted.com") || record.Contains("proofpoint"));
-        var mxMatch = isOffice365 || isProofpoint;
-        DisplayMatchResult("MX Record (Office 365 or Proofpoint)", domain, mxMatch, mxRecords);
+        return result;
     }
+
 
 
     static async Task QueryAndDisplayAllRecords(LookupClient client, string domain)
@@ -105,15 +166,49 @@ class Program
             }
         }
     }
-    static void DisplayMatchResult(string recordType, string domain, bool isMatch, List<string> records)
+    static List<string> ReadDomainsFromCsv(string filePath)
     {
-        Console.ForegroundColor = isMatch ? ConsoleColor.Green : ConsoleColor.Red;
-        Console.WriteLine($"  {recordType} Match for {domain}: {(isMatch ? "Yes" : "No")}");
-        if (!isMatch)
+        var domains = new List<string>();
+        try
         {
-            Console.WriteLine($"    Actual {recordType}s: {string.Join(", ", records)}");
+            Console.WriteLine($"Attempting to read domains from '{filePath}'...");
+
+            using (var reader = new StreamReader(filePath))
+            {
+                string line;
+                int lineCount = 0;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    lineCount++;
+                    domains.Add(line);
+                }
+
+                Console.WriteLine($"Successfully read {lineCount} domains.");
+            }
         }
-        Console.ResetColor();
+        catch (FileNotFoundException)
+        {
+            Console.WriteLine($"File not found: {filePath}");
+            // Handle the exception or rethrow
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading file: {ex.Message}");
+            // Handle the exception or rethrow
+            throw;
+        }
+
+        return domains;
+    }
+
+    static void ExportResultsToCsv(string filePath, List<DomainCheckResult> results)
+    {
+        using (var writer = new StreamWriter(filePath))
+        using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
+        {
+            csv.WriteRecords(results);
+        }
     }
 
 }
