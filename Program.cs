@@ -12,15 +12,15 @@ using Serilog;
 
 class DomainCheckResult
 {
-    public string Domain { get; set; }
+    public string? Domain { get; set; }
     public bool NsMatch { get; set; }
-    public List<string> NsRecords { get; set; }
+    public List<string>? NsRecords { get; set; }
     public bool AMatch { get; set; }
-    public List<string> ARecords { get; set; }
+    public List<string>? ARecords { get; set; }
     public bool MxMatch { get; set; }
-    public List<string> MxRecords { get; set; }
+    public List<string>? MxRecords { get; set; }
     public bool IsBroken { get; set; }
-    public string SpfRecord { get; set; }
+    public string? SpfRecord { get; set; }
 }
 
 
@@ -144,10 +144,20 @@ class Program
             Console.WriteLine();
             Console.ForegroundColor=ConsoleColor.Cyan;
             Console.WriteLine("SPF Record:");
-            Console.ResetColor();
             if (!string.IsNullOrEmpty(result.SpfRecord))
             {
+                // Check if the SPF record ends with -all or ~all
+                if (result.SpfRecord.EndsWith("-all"))
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                }
+                else
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                }
+
                 Console.WriteLine($"  {result.SpfRecord}");
+                Console.ResetColor(); // Reset to default color after displaying the record
             }
             else
             {
