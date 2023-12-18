@@ -59,21 +59,24 @@ class Program
         var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
         var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2" };
 
-        Console.WriteLine("Do you want to check an individual domain ('i') or the domain.csv file ('d')? Press Enter for 'i'.");
-        var choice = Console.ReadLine().Trim().ToLower();
-
-        if (string.IsNullOrEmpty(choice) || choice == "i")
+        while (true)
         {
-            Console.Write("Enter the domain to check: ");
-            var domain = Console.ReadLine().Trim();
+            Console.WriteLine();
+            Console.WriteLine("Do you want to check an individual domain ('i'), the domain.csv file ('d'), or exit ('e')? Press Enter for 'i'.");
+            var choice = Console.ReadLine().Trim().ToLower();
 
-            if (string.IsNullOrWhiteSpace(domain))
+            if (string.IsNullOrEmpty(choice) || choice == "i")
             {
-                Console.WriteLine("No domain entered. Exiting.");
-                return;
-            }
+                Console.Write("Enter the domain to check: ");
+                var domain = Console.ReadLine().Trim();
 
-            Console.WriteLine($"Checking individual domain: {domain}");
+                if (string.IsNullOrWhiteSpace(domain))
+                {
+                    Console.WriteLine("No domain entered.");
+                    continue; // Skip to next iteration of the loop
+                }
+
+                Console.WriteLine($"Checking individual domain: {domain}");
             var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
             // Display results for the individual domain
@@ -182,11 +185,16 @@ class Program
             Log.Information("All domains processed. Writing results to CSV");
             ExportResultsToCsv(outputFilePath, results);
             Log.Information("Export completed successfully");
-        }
-        else
-        {
-            Console.WriteLine("Invalid choice. Exiting program.");
-            return;
+            }
+            else if (choice == "e")
+            {
+                Console.WriteLine("Exiting program.");
+                break; // Exits the while loop and ends the program
+            }
+            else
+            {
+                Console.WriteLine("Invalid choice. Please enter 'i' for individual, 'd' for CSV, or 'e' to exit.");
+            }
         }
 
         Log.CloseAndFlush();
