@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using CsvHelper;
 using DnsClient;
+using Microsoft.Win32;
 using Serilog;
 
 class DomainCheckResult
@@ -35,20 +36,30 @@ class Program
             .WriteTo.Console()
             .CreateLogger();
 
-        IPAddress dnsServerAddress = IPAddress.Parse("8.8.8.8");
+        // Read DNS server address from registry and parse it
+        string dnsServerAddressString = RegistryHelper.GetDnsServerAddress();
+        if (!IPAddress.TryParse(dnsServerAddressString, out IPAddress dnsServerAddress))
+        {
+            dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
+        }
 
         // Ask if the user wants to change the DNS server
-        Console.WriteLine("The default DNS server is 8.8.8.8. Do you want to use a different one? (yes/no)");
+        Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
         var response = Console.ReadLine().Trim();
 
         if (response.Equals("yes", StringComparison.OrdinalIgnoreCase))
         {
             Console.Write("Enter the new DNS server IP address: ");
             var dnsInput = Console.ReadLine().Trim();
-            if (!IPAddress.TryParse(dnsInput, out dnsServerAddress))
+            if (IPAddress.TryParse(dnsInput, out IPAddress parsedAddress))
             {
-                Console.WriteLine("Invalid IP address. Using the default DNS server (8.8.8.8).");
-                dnsServerAddress = IPAddress.Parse("8.8.8.8");
+                dnsServerAddress = parsedAddress;
+                // Save the new DNS server address to the registry
+                RegistryHelper.SaveDnsServerAddress(dnsServerAddress.ToString());
+            }
+            else
+            {
+                Console.WriteLine("Invalid IP address. Using the current DNS server.");
             }
         }
 
@@ -307,3 +318,37 @@ class Program
     }
 
 }
+
+public static class RegistryHelper
+{
+    private const string RegistryKeyPath = @"SOFTWARE\DNSChecker\Settings";
+    private const string DnsServerValueName = "DNSServer";
+
+    public static void SaveDnsServerAddress(string dnsServerAddress)
+    {
+        using (var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath))
+        {
+            key.SetValue(DnsServerValueName, dnsServerAddress);
+        }
+    }
+
+    public static string GetDnsServerAddress()
+    {
+        using (var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath))
+        {
+            if (key != null)
+            {
+                var value = key.GetValue(DnsServerValueName);
+                if (value != null)
+                {
+                    return value.ToString();
+                }
+            }
+
+            // Return default if not set
+            return "8.8.8.8";
+        }
+    }
+
+}
+
