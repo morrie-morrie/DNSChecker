@@ -148,28 +148,35 @@ class Program
             }
 
             Console.WriteLine();
-            Console.ForegroundColor=ConsoleColor.Cyan;
-                Console.WriteLine($"SPF Record Valid: {result.SpfValid}");
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("SPF Record:");
+                Console.ResetColor();
+
                 if (!string.IsNullOrEmpty(result.SpfRecord))
-            {
-                // Check if the SPF record ends with -all or ~all
-                if (result.SpfRecord.EndsWith("-all"))
                 {
-                    Console.ForegroundColor = ConsoleColor.Green;
+                    // Display validity status with color
+                    Console.Write("  Valid: ");
+                    Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine(result.SpfValid);
+
+                    // Reset color before displaying "Record:" label
+                    Console.ResetColor();
+                    Console.WriteLine("  Record:");
+
+                    // Apply color to the SPF record based on the "-all" check
+                    Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
+                    Console.WriteLine($"    {result.SpfRecord}");
+
+                    // Reset the color back to default
+                    Console.ResetColor();
                 }
                 else
                 {
                     Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine("  No SPF record found.");
+                    Console.ResetColor();
                 }
-
-                Console.WriteLine($"  {result.SpfRecord}");
-                Console.ResetColor(); // Reset to default color after displaying the record
             }
-            else
-            {
-                Console.WriteLine("  No SPF record found.");
-            }
-        }
         else if (choice == "d")
         {
             // File paths for CSV input and output
@@ -227,9 +234,9 @@ class Program
                 .ToList();
 
             // Concatenate the parts of the SPF record
-            result.SpfRecord = string.Join(" ", spfParts);
+            result.SpfRecord = string.Join("", spfParts);
 
-            result.SpfValid = result.SpfRecord.EndsWith("-all") || result.SpfRecord.EndsWith("~all") || result.SpfRecord.EndsWith("+all") || result.SpfRecord.EndsWith("?all");
+            result.SpfValid = result.SpfRecord?.EndsWith("-all") ?? false;
 
             // Process other DNS records
             result.NsRecords = nsResponse.Answers.NsRecords().Select(r => r.NSDName.Value.TrimEnd('.')).ToList();
