@@ -1,14 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Formats.Asn1;
-using System.Globalization;
-using System.Linq;
+﻿using System.Globalization;
 using System.Net;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using CsvHelper;
 using DnsClient;
-using Microsoft.Win32;
 using Serilog;
 
 class DomainCheckResult
@@ -22,8 +15,8 @@ class DomainCheckResult
     public List<string>? MxRecords { get; set; }
     public bool IsBroken { get; set; }
     public string? SpfRecord { get; set; }
+    public bool SpfValid { get; set; } // Add this line
 }
-
 
 
 class Program
@@ -36,12 +29,8 @@ class Program
             .WriteTo.Console()
             .CreateLogger();
 
-        // Read DNS server address from registry and parse it
-        string dnsServerAddressString = RegistryHelper.GetDnsServerAddress();
-        if (!IPAddress.TryParse(dnsServerAddressString, out IPAddress dnsServerAddress))
-        {
-            dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
-        }
+            var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
+        
 
         // Ask if the user wants to change the DNS server
         Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
@@ -54,8 +43,6 @@ class Program
             if (IPAddress.TryParse(dnsInput, out IPAddress parsedAddress))
             {
                 dnsServerAddress = parsedAddress;
-                // Save the new DNS server address to the registry
-                RegistryHelper.SaveDnsServerAddress(dnsServerAddress.ToString());
             }
             else
             {
@@ -224,18 +211,27 @@ class Program
 
         try
         {
+            // Perform DNS queries
             var nsResponse = await client.QueryAsync(domain, QueryType.NS);
             var aResponse = await client.QueryAsync(domain, QueryType.A);
             var mxResponse = await client.QueryAsync(domain, QueryType.MX);
             var txtResponse = await client.QueryAsync(domain, QueryType.TXT);
-            result.SpfRecord = txtResponse.Answers.TxtRecords()
-                .Select(txt => txt.Text.FirstOrDefault())
-                .FirstOrDefault(txt => txt.StartsWith("v=spf1"));
+            var spfParts = txtResponse.Answers.TxtRecords()
+                .SelectMany(txt => txt.Text)
+                .Where(txt => txt.Contains("v=spf1") || txt.Contains("include:") || txt.Contains("ip4:") || txt.Contains("ip6:") || txt.EndsWith("-all") || txt.EndsWith("~all") || txt.EndsWith("+all") || txt.EndsWith("?all"))
+                .ToList();
 
+            // Concatenate the parts of the SPF record
+            result.SpfRecord = string.Join(" ", spfParts);
+
+            result.SpfValid = result.SpfRecord.EndsWith("-all") || result.SpfRecord.EndsWith("~all") || result.SpfRecord.EndsWith("+all") || result.SpfRecord.EndsWith("?all");
+
+            // Process other DNS records
             result.NsRecords = nsResponse.Answers.NsRecords().Select(r => r.NSDName.Value.TrimEnd('.')).ToList();
             result.ARecords = aResponse.Answers.ARecords().Select(r => r.Address.ToString()).ToList();
             result.MxRecords = mxResponse.Answers.MxRecords().Select(r => r.Exchange.Value.ToLower().TrimEnd('.')).ToList();
 
+            // Perform matching checks
             result.NsMatch = result.NsRecords.Any(r => targetNs.Contains(r));
             result.AMatch = result.ARecords.Any(r => targetA.Contains(r));
             result.MxMatch = result.MxRecords.Any(r => r.EndsWith("protection.outlook.com") || r.Contains("ppe-hosted.com") || r.Contains("proofpoint"));
@@ -248,6 +244,7 @@ class Program
 
         return result;
     }
+
 
 
 
@@ -314,39 +311,6 @@ class Program
         using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
         {
             csv.WriteRecords(results);
-        }
-    }
-
-}
-
-public static class RegistryHelper
-{
-    private const string RegistryKeyPath = @"SOFTWARE\DNSChecker\Settings";
-    private const string DnsServerValueName = "DNSServer";
-
-    public static void SaveDnsServerAddress(string dnsServerAddress)
-    {
-        using (var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath))
-        {
-            key.SetValue(DnsServerValueName, dnsServerAddress);
-        }
-    }
-
-    public static string GetDnsServerAddress()
-    {
-        using (var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath))
-        {
-            if (key != null)
-            {
-                var value = key.GetValue(DnsServerValueName);
-                if (value != null)
-                {
-                    return value.ToString();
-                }
-            }
-
-            // Return default if not set
-            return "8.8.8.8";
         }
     }
 
