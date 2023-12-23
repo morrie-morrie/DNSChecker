@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Net;
+using System.Reflection;
 using CsvHelper;
 using DnsClient;
 using Serilog;
@@ -23,6 +24,10 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        Console.WriteLine($"Application Version: {version}");
+        Console.WriteLine();
+
         // Set default DNS server to 8.8.8.8
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
