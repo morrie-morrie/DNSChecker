@@ -10,14 +10,18 @@ class DomainCheckResult
     public string? Domain { get; set; }
     public bool NsMatch { get; set; }
     public List<string>? NsRecords { get; set; }
+    public string NsRecordsString => string.Join("; ", NsRecords ?? new List<string>());
     public bool AMatch { get; set; }
     public List<string>? ARecords { get; set; }
+    public string ARecordsString => string.Join("; ", ARecords ?? new List<string>());
     public bool MxMatch { get; set; }
     public List<string>? MxRecords { get; set; }
+    public string MxRecordsString => string.Join("; ", MxRecords ?? new List<string>());
     public bool IsBroken { get; set; }
     public string? SpfRecord { get; set; }
-    public bool SpfValid { get; set; } // Add this line
+    public bool SpfValid { get; set; }
 }
+
 
 
 class Program
@@ -56,7 +60,8 @@ class Program
         }
 
         // Instantiate the LookupClient with the DNS server address
-        var client = new LookupClient(dnsServerAddress);
+        var client = new LookupClient(dnsServerAddress) { Timeout = TimeSpan.FromSeconds(4) }; // Example: 4-second timeout
+
 
         // Target NS and A records
         var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
@@ -248,10 +253,15 @@ class Program
             result.AMatch = result.ARecords.Any(r => targetA.Contains(r));
             result.MxMatch = result.MxRecords.Any(r => r.EndsWith("protection.outlook.com") || r.Contains("ppe-hosted.com") || r.Contains("proofpoint"));
         }
+        catch (DnsResponseException ex)
+        {
+            Log.Error(ex, $"DNS query failed for {domain}. Error: {ex.Message}");
+            result.IsBroken = true;  // Indicate that DNS query failed for this domain
+        }
         catch (Exception ex)
         {
-            Log.Error(ex, $"Failed to query DNS records for {domain}");
-            result.IsBroken = true;
+            Log.Error(ex, $"Unexpected error occurred for {domain}");
+            result.IsBroken = true;  // Indicate that there was an unexpected error
         }
 
         return result;
@@ -322,7 +332,19 @@ class Program
         using (var writer = new StreamWriter(filePath))
         using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
         {
-            csv.WriteRecords(results);
+            csv.WriteRecords(results.Select(result => new
+            {
+                result.Domain,
+                result.NsMatch,
+                NsRecords = result.NsRecordsString,
+                result.AMatch,
+                ARecords = result.ARecordsString,
+                result.MxMatch,
+                MxRecords = result.MxRecordsString,
+                result.IsBroken,
+                result.SpfRecord,
+                result.SpfValid
+            }));
         }
     }
 
