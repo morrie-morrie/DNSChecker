@@ -149,8 +149,8 @@ class Program
 
             Console.WriteLine();
             Console.ForegroundColor=ConsoleColor.Cyan;
-            Console.WriteLine("SPF Record:");
-            if (!string.IsNullOrEmpty(result.SpfRecord))
+                Console.WriteLine($"SPF Record Valid: {result.SpfValid}");
+                if (!string.IsNullOrEmpty(result.SpfRecord))
             {
                 // Check if the SPF record ends with -all or ~all
                 if (result.SpfRecord.EndsWith("-all"))
