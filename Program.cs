@@ -65,7 +65,7 @@ class Program
 
         // Target NS and A records
         var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
-        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2" };
+        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2, 43.245.72.13" };
 
         while (true)
         {
