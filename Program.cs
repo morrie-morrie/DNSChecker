@@ -1,9 +1,9 @@
-﻿using System.Globalization;
-using System.Net;
-using System.Reflection;
-using CsvHelper;
+﻿using CsvHelper;
 using DnsClient;
 using Serilog;
+using System.Globalization;
+using System.Net;
+using System.Reflection;
 
 class DomainCheckResult
 {
@@ -38,8 +38,8 @@ class Program
             .WriteTo.Console()
             .CreateLogger();
 
-            var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
-        
+        var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
+
 
         // Ask if the user wants to change the DNS server
         Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
@@ -65,7 +65,7 @@ class Program
 
         // Target NS and A records
         var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
-        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2, 43.245.72.13" };
+        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2", "43.245.72.13" };
 
         while (true)
         {
@@ -85,74 +85,74 @@ class Program
                 }
 
                 Console.WriteLine($"Checking individual domain: {domain}");
-            var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
+                var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
-            // Display results for the individual domain
-            Console.WriteLine();
-            Console.WriteLine($"Domain: {result.Domain}");
+                // Display results for the individual domain
+                Console.WriteLine();
+                Console.WriteLine($"Domain: {result.Domain}");
 
-            Console.ForegroundColor= ConsoleColor.Cyan;
-            Console.WriteLine(); 
-            Console.Write("NS Match: ");
-            Console.ForegroundColor = result.NsMatch ? ConsoleColor.Green : ConsoleColor.Red;
-            Console.WriteLine(result.NsMatch);
-            Console.ResetColor();
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine();
+                Console.Write("NS Match: ");
+                Console.ForegroundColor = result.NsMatch ? ConsoleColor.Green : ConsoleColor.Red;
+                Console.WriteLine(result.NsMatch);
+                Console.ResetColor();
 
-            Console.ForegroundColor = ConsoleColor.Cyan; 
-            Console.WriteLine("NS Records:");
-            Console.ResetColor();
-            foreach (var ns in result.NsRecords)
-            {
-                Console.WriteLine($"  {ns}");
-            }
-
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine();
-            Console.Write("A Match: ");
-            Console.ResetColor();
-            Console.ForegroundColor = result.AMatch ? ConsoleColor.Green : ConsoleColor.Red;
-            Console.WriteLine(result.AMatch);
-            Console.ResetColor();
-
-            Console.WriteLine("A Records for root domain:");
-            foreach (var aRecord in result.ARecords)
-            {
-                Console.WriteLine($"  {domain} resolves to {aRecord}");
-            }
-
-            // Perform an additional DNS query for the 'www' subdomain
-            var wwwDomain = $"www.{domain}";
-            Console.WriteLine($"A Records for {wwwDomain}:");
-            try
-            {
-                var wwwResponse = await client.QueryAsync(wwwDomain, QueryType.A);
-                foreach (var record in wwwResponse.Answers.ARecords())
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine("NS Records:");
+                Console.ResetColor();
+                foreach (var ns in result.NsRecords)
                 {
-                    Console.WriteLine($"  {wwwDomain} resolves to {record.Address}");
+                    Console.WriteLine($"  {ns}");
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
-            }
 
-            Console.ResetColor();
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine();
+                Console.Write("A Match: ");
+                Console.ResetColor();
+                Console.ForegroundColor = result.AMatch ? ConsoleColor.Green : ConsoleColor.Red;
+                Console.WriteLine(result.AMatch);
+                Console.ResetColor();
 
-            Console.ForegroundColor= ConsoleColor.Cyan;
-            Console.WriteLine();
-            Console.Write("MX Match: ");
-            Console.ResetColor();
-            Console.ForegroundColor = result.MxMatch ? ConsoleColor.Green : ConsoleColor.Red;
-            Console.WriteLine(result.MxMatch);
-            Console.ResetColor();
+                Console.WriteLine("A Records for root domain:");
+                foreach (var aRecord in result.ARecords)
+                {
+                    Console.WriteLine($"  {domain} resolves to {aRecord}");
+                }
 
-            Console.WriteLine("MX Records:");
-            foreach (var mxRecord in result.MxRecords)
-            {
-                Console.WriteLine($"  {mxRecord}");
-            }
+                // Perform an additional DNS query for the 'www' subdomain
+                var wwwDomain = $"www.{domain}";
+                Console.WriteLine($"A Records for {wwwDomain}:");
+                try
+                {
+                    var wwwResponse = await client.QueryAsync(wwwDomain, QueryType.A);
+                    foreach (var record in wwwResponse.Answers.ARecords())
+                    {
+                        Console.WriteLine($"  {wwwDomain} resolves to {record.Address}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
+                }
 
-            Console.WriteLine();
+                Console.ResetColor();
+
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine();
+                Console.Write("MX Match: ");
+                Console.ResetColor();
+                Console.ForegroundColor = result.MxMatch ? ConsoleColor.Green : ConsoleColor.Red;
+                Console.WriteLine(result.MxMatch);
+                Console.ResetColor();
+
+                Console.WriteLine("MX Records:");
+                foreach (var mxRecord in result.MxRecords)
+                {
+                    Console.WriteLine($"  {mxRecord}");
+                }
+
+                Console.WriteLine();
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine("SPF Record:");
                 Console.ResetColor();
@@ -182,24 +182,24 @@ class Program
                     Console.ResetColor();
                 }
             }
-        else if (choice == "d")
-        {
-            // File paths for CSV input and output
-            string inputFilePath = @"c:\techno\domains.csv";  // Path to the CSV file with domains
-            string outputFilePath = @"c:\techno\results.csv"; // Path to save the results
-
-            List<string> domains = ReadDomainsFromCsv(inputFilePath);
-            List<DomainCheckResult> results = new List<DomainCheckResult>();
-
-            foreach (var domain in domains)
+            else if (choice == "d")
             {
-                var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
-                results.Add(result);
-            }
+                // File paths for CSV input and output
+                string inputFilePath = @"c:\techno\domains.csv";  // Path to the CSV file with domains
+                string outputFilePath = @"c:\techno\results.csv"; // Path to save the results
 
-            Log.Information("All domains processed. Writing results to CSV");
-            ExportResultsToCsv(outputFilePath, results);
-            Log.Information("Export completed successfully");
+                List<string> domains = ReadDomainsFromCsv(inputFilePath);
+                List<DomainCheckResult> results = new List<DomainCheckResult>();
+
+                foreach (var domain in domains)
+                {
+                    var result = await CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
+                    results.Add(result);
+                }
+
+                Log.Information("All domains processed. Writing results to CSV");
+                ExportResultsToCsv(outputFilePath, results);
+                Log.Information("Export completed successfully");
             }
             else if (choice == "e")
             {
