@@ -13,13 +13,14 @@ class DomainCheckResult
     public string NsRecordsString => string.Join("; ", NsRecords ?? new List<string>());
     public bool AMatch { get; set; }
     public List<string>? ARecords { get; set; }
-    public string ARecordsString => string.Join("; ", ARecords ?? new List<string>());
+    public string ARecordsString => string.Join("; ", ARecords?.Select(ip => Program.ServerNames.ContainsKey(ip) ? $"{ip} (running on our {Program.ServerNames[ip]})" : ip) ?? new List<string>());
     public bool MxMatch { get; set; }
     public List<string>? MxRecords { get; set; }
     public string MxRecordsString => string.Join("; ", MxRecords ?? new List<string>());
     public bool IsBroken { get; set; }
     public string? SpfRecord { get; set; }
     public bool SpfValid { get; set; }
+
 }
 
 
@@ -114,21 +115,55 @@ class Program
                 Console.WriteLine(result.AMatch);
                 Console.ResetColor();
 
-                Console.WriteLine("A Records for root domain:");
-                foreach (var aRecord in result.ARecords)
+                // Printing A Records for the root domain
+                Console.WriteLine($"A Records for {result.Domain}:");
+                foreach (var ip in result.ARecords ?? new List<string>())
                 {
-                    Console.WriteLine($"  {domain} resolves to {aRecord}");
-                }
+                    // Print the IP address in the original color
+                    Console.Write($"  {ip}");
 
+                    if (Program.ServerNames.ContainsKey(ip))
+                    {
+                        // Change color to green for specific text
+                        Console.ForegroundColor = ConsoleColor.Green;
+
+                        // Print the additional details in green
+                        Console.Write($" (running on our {Program.ServerNames[ip]})");
+
+                        // Reset the color
+                        Console.ResetColor();
+                    }
+
+                    // Print the separator
+                    Console.WriteLine();
+                }
                 // Perform an additional DNS query for the 'www' subdomain
                 var wwwDomain = $"www.{domain}";
                 Console.WriteLine($"A Records for {wwwDomain}:");
                 try
                 {
                     var wwwResponse = await client.QueryAsync(wwwDomain, QueryType.A);
-                    foreach (var record in wwwResponse.Answers.ARecords())
+                    var wwwARecords = wwwResponse.Answers.ARecords().Select(r => r.Address.ToString()).ToList();
+
+                    foreach (var ip in wwwARecords)
                     {
-                        Console.WriteLine($"  {wwwDomain} resolves to {record.Address}");
+                        // Print the IP address in the original color
+                        Console.Write($"  {ip}");
+
+                        if (Program.ServerNames.ContainsKey(ip))
+                        {
+                            // Change color to green for specific text
+                            Console.ForegroundColor = ConsoleColor.Green;
+
+                            // Print the additional details in green
+                            Console.Write($" (running on our {Program.ServerNames[ip]})");
+
+                            // Reset the color
+                            Console.ResetColor();
+                        }
+
+                        // Print the separator for the next record
+                        Console.WriteLine();
                     }
                 }
                 catch (Exception ex)
@@ -347,6 +382,13 @@ class Program
             }));
         }
     }
+
+    public static readonly Dictionary<string, string> ServerNames = new Dictionary<string, string>
+    {
+        { "103.116.1.1", "CP10" },
+        { "103.116.1.2", "CP11" },
+        { "43.245.72.13", "CP99" }
+    };
 
 }
 
