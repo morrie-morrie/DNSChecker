@@ -8,14 +8,17 @@ internal class Program
 {
     private static async Task Main(string[] args)
     {
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        Console.WriteLine($"Application Version: {version}");
-        Console.WriteLine();
-
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
-            .WriteTo.File("log.txt", rollingInterval: RollingInterval.Day)
+            .WriteTo.File(Path.Combine("Logs", "log.txt"), rollingInterval: RollingInterval.Day)
             .CreateLogger();
+
+        Log.Information("---------------------");
+        Log.Information("Application started");
+
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        Console.WriteLine();
+        Console.WriteLine($"Application Version: {version}");
 
         var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
         Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
@@ -28,6 +31,7 @@ internal class Program
             if (IPAddress.TryParse(dnsInput, out IPAddress parsedAddress))
             {
                 dnsServerAddress = parsedAddress;
+                Log.Information($"Using DNS server {dnsServerAddress}");
             }
             else
             {
@@ -45,6 +49,8 @@ internal class Program
             Console.WriteLine("Do you want to check an individual domain ('i'), the domain.csv file ('d'), or exit ('q')? Press Enter for 'i'.");
             var choice = Console.ReadLine().Trim().ToLower();
 
+            Log.Information($"User choice: {choice}");
+
             if (string.IsNullOrEmpty(choice) || choice == "i")
             {
                 Console.Write("Enter the domain to check: ");
@@ -53,10 +59,12 @@ internal class Program
                 if (string.IsNullOrWhiteSpace(domain))
                 {
                     Console.WriteLine("No domain entered.");
+                    Log.Information("No domain entered");
                     continue; // Skip to next iteration of the loop
                 }
 
                 Console.WriteLine($"Checking individual domain: {domain}");
+                Log.Information($"Checking individual domain: {domain}");
                 var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
                 Console.WriteLine();
@@ -119,6 +127,7 @@ internal class Program
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
+                    Log.Error(ex, $"Error querying A records for {wwwDomain}");
                 }
                 Console.ResetColor();
                 Console.ForegroundColor = ConsoleColor.Cyan;
@@ -179,11 +188,13 @@ internal class Program
             else if (choice == "q")
             {
                 Console.WriteLine("Exiting program.");
+                Log.Information("User chose to exit the program");
                 break; // Exits the while loop and ends the program
             }
             else
             {
                 Console.WriteLine("Invalid choice. Please enter 'i' for individual, 'd' for CSV, or 'q' to exit.");
+                Log.Information("Invalid choice");
             }
         }
         Log.CloseAndFlush();
