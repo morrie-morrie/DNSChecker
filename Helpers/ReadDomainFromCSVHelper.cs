@@ -13,6 +13,7 @@
                 var lines = File.ReadAllLines(filePath);
                 domains.AddRange(lines);
                 Console.WriteLine($"Successfully read {lines.Length} domains.");
+                Console.WriteLine();
             }
             else
             {

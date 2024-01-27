@@ -14,7 +14,7 @@ internal class Program
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
-            .WriteTo.Console()
+            .WriteTo.File("log.txt", rollingInterval: RollingInterval.Day)
             .CreateLogger();
 
         var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
@@ -171,6 +171,7 @@ internal class Program
                     results.Add(result);
                 }
 
+                CheckAndMatchDomainHelper.DisplayBrokenDomains();
                 Log.Information("All domains processed. Writing results to CSV");
                 ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results);
                 Log.Information("Export completed successfully");

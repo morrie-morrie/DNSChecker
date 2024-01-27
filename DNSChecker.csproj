@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <ApplicationIcon>Resources\domain_check_icon.ico</ApplicationIcon>
     <Title>DNSChecker</Title>
-	<Version>1.0.0.7</Version>
+	<Version>1.0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,6 +21,7 @@
     <PackageReference Include="DnsClient" Version="1.7.0" />
     <PackageReference Include="Serilog" Version="3.1.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
   </ItemGroup>
 
 </Project>
