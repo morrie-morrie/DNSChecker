@@ -1,4 +1,8 @@
-﻿class DomainCheckResult
+﻿using DnsChecker.Helpers;
+
+namespace DnsChecker.Entities;
+
+internal class DomainCheckResult
 {
     public string? Domain { get; set; }
     public bool NsMatch { get; set; }
@@ -13,6 +17,4 @@
     public bool IsBroken { get; set; }
     public string? SpfRecord { get; set; }
     public bool SpfValid { get; set; }
-
 }
-

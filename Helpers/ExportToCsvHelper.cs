@@ -1,4 +1,5 @@
 ﻿using CsvHelper;
+using DnsChecker.Entities;
 using System.Globalization;
 
 namespace DnsChecker.Helpers;

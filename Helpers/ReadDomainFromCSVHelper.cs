@@ -1,4 +1,6 @@
-﻿internal class ReadDomainFromCSVHelper
+﻿namespace DnsChecker.Helpers;
+
+internal class ReadDomainFromCsvHelper
 {
     public static List<string> ReadDomainsFromCsv(string filePath)
     {

@@ -1,8 +1,10 @@
-﻿using DnsChecker.Helpers;
+﻿using DNSChecker.Helpers;
+using DnsChecker.Entities;
 using DnsClient;
 using Serilog;
 using System.Net;
 using System.Reflection;
+using DnsChecker.Helpers;
 
 namespace DnsChecker;
 
@@ -179,7 +181,7 @@ public static class Program
                 string inputFilePath = @"c:\techno\domains.csv";  // Path to the CSV file with domains
                 string outputFilePath = @"c:\techno\results.csv"; // Path to save the results
 
-                List<string> domains = ReadDomainFromCSVHelper.ReadDomainsFromCsv(inputFilePath);
+                List<string> domains = ReadDomainFromCsvHelper.ReadDomainsFromCsv(inputFilePath);
                 List<DomainCheckResult> results = new List<DomainCheckResult>();
 
                 foreach (var domain in domains)

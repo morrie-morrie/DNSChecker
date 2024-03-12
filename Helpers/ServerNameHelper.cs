@@ -1,4 +1,6 @@
-﻿internal class ServerNameHelper
+﻿namespace DnsChecker.Helpers;
+
+internal class ServerNameHelper
 {
     public static readonly Dictionary<string, string> ServerNames = new()
     {

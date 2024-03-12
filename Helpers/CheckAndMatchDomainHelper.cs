@@ -1,5 +1,8 @@
-﻿using DnsClient;
+﻿using DnsChecker.Entities;
+using DnsClient;
 using Serilog;
+
+namespace DNSChecker.Helpers;
 
 internal class CheckAndMatchDomainHelper
 {
