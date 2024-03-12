@@ -4,7 +4,9 @@ using Serilog;
 using System.Net;
 using System.Reflection;
 
-internal class Program
+namespace DnsChecker;
+
+public static class Program
 {
     private static async Task Main(string[] args)
     {
@@ -22,13 +24,13 @@ internal class Program
 
         var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
         Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
-        var response = Console.ReadLine().Trim();
+        string? response = Console.ReadLine()?.Trim();
 
-        if (response.Equals("yes", StringComparison.OrdinalIgnoreCase))
+        if (response != null && response.Equals("yes", StringComparison.OrdinalIgnoreCase))
         {
             Console.Write("Enter the new DNS server IP address: ");
-            var dnsInput = Console.ReadLine().Trim();
-            if (IPAddress.TryParse(dnsInput, out IPAddress parsedAddress))
+            string? dnsInput = Console.ReadLine()?.Trim();
+            if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
             {
                 dnsServerAddress = parsedAddress;
                 Log.Information($"Using DNS server {dnsServerAddress}");
@@ -47,14 +49,14 @@ internal class Program
         {
             Console.WriteLine();
             Console.WriteLine("Do you want to check an individual domain ('i'), the domain.csv file ('d'), or exit ('q')? Press Enter for 'i'.");
-            var choice = Console.ReadLine().Trim().ToLower();
+            var choice = Console.ReadLine()?.Trim().ToLower();
 
             Log.Information($"User choice: {choice}");
 
             if (string.IsNullOrEmpty(choice) || choice == "i")
             {
                 Console.Write("Enter the domain to check: ");
-                var domain = Console.ReadLine().Trim();
+                var domain = Console.ReadLine()?.Trim();
 
                 if (string.IsNullOrWhiteSpace(domain))
                 {
@@ -78,9 +80,12 @@ internal class Program
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine("NS Records:");
                 Console.ResetColor();
-                foreach (var ns in result.NsRecords)
+                if (result.NsRecords != null)
                 {
-                    Console.WriteLine($"  {ns}");
+                    foreach (var ns in result.NsRecords)
+                    {
+                        Console.WriteLine($"  {ns}");
+                    }
                 }
                 Console.ForegroundColor = ConsoleColor.Cyan;
                 Console.WriteLine();
@@ -139,9 +144,12 @@ internal class Program
                 Console.ResetColor();
                 Console.WriteLine("MX Records:");
 
-                foreach (var mxRecord in result.MxRecords)
+                if (result.MxRecords != null)
                 {
-                    Console.WriteLine($"  {mxRecord}");
+                    foreach (var mxRecord in result.MxRecords)
+                    {
+                        Console.WriteLine($"  {mxRecord}");
+                    }
                 }
                 Console.WriteLine();
                 Console.ForegroundColor = ConsoleColor.Cyan;
