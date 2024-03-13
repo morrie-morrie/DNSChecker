@@ -43,7 +43,13 @@ public static class Program
             }
         }
 
-        var client = new LookupClient(dnsServerAddress) { Timeout = TimeSpan.FromSeconds(4) }; // Example: 4-second timeout
+        var clientOptions = new LookupClientOptions(dnsServerAddress)
+        {
+            Timeout = TimeSpan.FromSeconds(4)
+        };
+
+        var client = new LookupClient(clientOptions);
+
         var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
         var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2", "43.245.72.13" };
 
