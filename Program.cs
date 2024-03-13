@@ -73,7 +73,7 @@ public static class Program
                     continue; // Skip to next iteration of the loop
                 }
 
-                Console.WriteLine("Checking individual domain: {domain}", domain);
+                Console.WriteLine($"Checking individual domain: {domain}");
                 Log.Information("Checking individual domain: {domain}", domain);
                 var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
