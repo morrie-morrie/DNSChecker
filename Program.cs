@@ -108,10 +108,10 @@ public static class Program
                 {
                     Console.Write($"  {ip}");
 
-                    if (ServerNameHelper.ServerNames.ContainsKey(ip))
+                    if (ServerNameHelper.ServerNames.TryGetValue(ip, out var serverName))
                     {
                         Console.ForegroundColor = ConsoleColor.Green;
-                        Console.Write($" (running on our {ServerNameHelper.ServerNames[ip]})");
+                        Console.Write($" (running on our {serverName})");
                         Console.ResetColor();
                     }
                     Console.WriteLine();
@@ -128,7 +128,7 @@ public static class Program
                     {
                         Console.Write($"  {ip}");
 
-                        if (ServerNameHelper.ServerNames.ContainsKey(ip))
+                        if (ServerNameHelper.ServerNames.TryGetValue(ip, out var serverName))
                         {
                             Console.ForegroundColor = ConsoleColor.Green;
                             Console.Write($" (running on our {ServerNameHelper.ServerNames[ip]})");
@@ -140,7 +140,7 @@ public static class Program
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
-                    Log.Error(ex, $"Error querying A records for {wwwDomain}");
+                    Log.Error(ex, "Error querying A records for {wwwDomain}", wwwDomain);
                 }
                 Console.ResetColor();
                 Console.ForegroundColor = ConsoleColor.Cyan;
