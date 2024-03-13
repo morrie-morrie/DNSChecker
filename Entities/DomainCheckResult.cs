@@ -18,7 +18,7 @@ internal class DomainCheckResult
     public string? SpfRecord { get; set; }
     public bool SpfValid { get; set; }
 
-    private string GetServerName(string ip)
+    private static string GetServerName(string ip)
     {
         if (ServerNameHelper.ServerNames.TryGetValue(ip, out string? serverName))
         {
