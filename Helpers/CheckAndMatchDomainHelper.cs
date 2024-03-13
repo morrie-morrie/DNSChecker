@@ -59,19 +59,19 @@ internal static class CheckAndMatchDomainHelper
         }
         catch (DnsResponseException ex)
         {
-            Log.Error(ex, $"DNS query failed for {domain}.");
+            Log.Error(ex, "DNS query failed for {domain}.", domain);
             result.IsBroken = true;  // Indicate that DNS query failed for this domain
             BrokenDomains.Add(domain);
         }
         catch (OperationCanceledException ex)
         {
-            Log.Error(ex, $"DNS query timed out for {domain}.");
+            Log.Error(ex, "DNS query timed out for {domain}.", domain);
             result.IsBroken = true; // Indicate that DNS query timed out for this domain
             BrokenDomains.Add(domain);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, $"Unexpected error occurred for {domain}");
+            Log.Error(ex, "Unexpected error occurred for {domain}", domain);
             result.IsBroken = true;  // Indicate that there was an unexpected error
             BrokenDomains.Add(domain);
         }
@@ -94,7 +94,7 @@ internal static class CheckAndMatchDomainHelper
 
     public static void DisplayBrokenDomains()
     {
-        if (BrokenDomains.Any())
+        if (BrokenDomains.Count > 0)
         {
             Console.WriteLine();
             Console.WriteLine("\nDomains where DNS query failed or timed out:");
