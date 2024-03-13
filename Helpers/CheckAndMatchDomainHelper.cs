@@ -4,9 +4,14 @@ using Serilog;
 
 namespace DNSChecker.Helpers;
 
-internal class CheckAndMatchDomainHelper
+internal static class CheckAndMatchDomainHelper
 {
-    public static List<string> BrokenDomains = new List<string>();
+    internal static readonly List<string> BrokenDomains = new List<string>();
+
+    static CheckAndMatchDomainHelper()
+    {
+        // Private constructor to prevent instantiation of the class
+    }
 
     public static async Task<DomainCheckResult> CheckAndMatchDomain(LookupClient client, string domain, List<string> targetNs, List<string> targetA)
     {
@@ -24,11 +29,11 @@ internal class CheckAndMatchDomainHelper
         try
         {
             var queries = new Task<IDnsQueryResponse>[] {
-            client.QueryAsync(domain, QueryType.NS),
-            client.QueryAsync(domain, QueryType.A),
-            client.QueryAsync(domain, QueryType.MX),
-            client.QueryAsync(domain, QueryType.TXT)
-        };
+                    client.QueryAsync(domain, QueryType.NS),
+                    client.QueryAsync(domain, QueryType.A),
+                    client.QueryAsync(domain, QueryType.MX),
+                    client.QueryAsync(domain, QueryType.TXT)
+                };
 
             var responses = await Task.WhenAll(queries);
 
