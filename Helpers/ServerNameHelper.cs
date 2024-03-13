@@ -8,4 +8,8 @@ internal class ServerNameHelper
         { "103.116.1.2", "CP11" },
         { "43.245.72.13", "CP99" }
     };
+
+    protected ServerNameHelper()
+    {
+    }
 }

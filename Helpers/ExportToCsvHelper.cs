@@ -6,6 +6,11 @@ namespace DnsChecker.Helpers;
 
 internal class ExportToCsvHelper
 {
+    protected ExportToCsvHelper()
+    {
+        // Constructor logic here
+    }
+
     public static void ExportResultsToCsv(string filePath, List<DomainCheckResult> results)
     {
         using (var writer = new StreamWriter(filePath))
@@ -24,7 +29,7 @@ internal class ExportToCsvHelper
                 result.SpfRecord,
                 result.SpfValid
             }));
-            Serilog.Log.Information($"Successfully wrote {results.Count} results to {filePath}");
+            Serilog.Log.Information("Successfully wrote {Count} results to {FilePath}", results.Count, filePath);
         }
     }
 }

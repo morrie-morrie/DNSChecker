@@ -2,6 +2,10 @@
 
 internal class ReadDomainFromCsvHelper
 {
+    protected ReadDomainFromCsvHelper()
+    {
+    }
+
     public static List<string> ReadDomainsFromCsv(string filePath)
     {
         var domains = new List<string>();

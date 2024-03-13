@@ -35,7 +35,7 @@ public static class Program
             if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
             {
                 dnsServerAddress = parsedAddress;
-                Log.Information($"Using DNS server {dnsServerAddress}");
+                Log.Information("Using DNS server {dnsServerAddress}", dnsServerAddress);
             }
             else
             {
@@ -59,7 +59,7 @@ public static class Program
             Console.WriteLine("Do you want to check an individual domain ('i'), the domain.csv file ('d'), or exit ('q')? Press Enter for 'i'.");
             var choice = Console.ReadLine()?.Trim().ToLower();
 
-            Log.Information($"User choice: {choice}");
+            Log.Information("User choice: {choice}", choice);
 
             if (string.IsNullOrEmpty(choice) || choice == "i")
             {
@@ -73,8 +73,8 @@ public static class Program
                     continue; // Skip to next iteration of the loop
                 }
 
-                Console.WriteLine($"Checking individual domain: {domain}");
-                Log.Information($"Checking individual domain: {domain}");
+                Console.WriteLine("Checking individual domain: {domain}", domain);
+                Log.Information("Checking individual domain: {domain}", domain);
                 var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
 
                 Console.WriteLine();
