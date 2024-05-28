@@ -5,6 +5,8 @@ using Serilog;
 using System.Net;
 using System.Reflection;
 using DnsChecker.Helpers;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
 
 namespace DnsChecker;
 
@@ -12,6 +14,11 @@ public static class Program
 {
     private static async Task Main(string[] args)
     {
+        var configuration = new ConfigurationBuilder()
+           .SetBasePath(Directory.GetCurrentDirectory())
+           .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+           .Build();
+
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
             .WriteTo.File(Path.Combine("Logs", "log.txt"), rollingInterval: RollingInterval.Day)
@@ -23,19 +30,48 @@ public static class Program
         var version = Assembly.GetExecutingAssembly().GetName().Version;
         Console.WriteLine();
         Console.WriteLine($"Application Version: {version}");
+        Console.WriteLine();
 
-        var dnsServerAddress = IPAddress.Parse("8.8.8.8"); // Default if parsing fails
-        Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (yes/no)");
-        string? response = Console.ReadLine()?.Trim();
+        // Read the settings file
+        string settingsFilePath = "settings.json";
+        string dnsServerAddressString;
+        if (File.Exists(settingsFilePath))
+        {
+            var settings = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile(settingsFilePath, optional: true, reloadOnChange: true)
+                .Build();
+            dnsServerAddressString = settings["DnsServerAddress"];
+            Console.Write("Using DNS server address from settings file: ");
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine(dnsServerAddressString);
+            Console.ResetColor();
+            Log.Information("Using DNS server address from settings file: {DnsServerAddress}", dnsServerAddressString);
+        }
+        else
+        {
+            dnsServerAddressString = "8.8.8.8"; // Default if settings file doesn't exist
+            Console.WriteLine("Using default DNS server address: {0}", dnsServerAddressString);
+            Log.Information("Using default DNS server address: {DnsServerAddress}", dnsServerAddressString);
+        }
 
-        if (response != null && response.Equals("yes", StringComparison.OrdinalIgnoreCase))
+        var dnsServerAddress = IPAddress.Parse(dnsServerAddressString);
+        Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (Y/N)");
+        string? response = Console.ReadLine()?.Trim().ToUpper();
+
+        if (response == "Y")
         {
             Console.Write("Enter the new DNS server IP address: ");
             string? dnsInput = Console.ReadLine()?.Trim();
             if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
             {
                 dnsServerAddress = parsedAddress;
-                Log.Information("Using DNS server {dnsServerAddress}", dnsServerAddress);
+                Log.Information("Using DNS server {DnsServerAddress}", dnsServerAddress);
+
+                // Save the new DNS server address to the settings file
+                var settings = new { DnsServerAddress = dnsServerAddress.ToString() };
+                string json = JsonConvert.SerializeObject(settings, Formatting.Indented);
+                File.WriteAllText(settingsFilePath, json);
             }
             else
             {
