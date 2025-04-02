@@ -41,7 +41,7 @@ public static class Program
                 .SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile(settingsFilePath, optional: true, reloadOnChange: true)
                 .Build();
-            dnsServerAddressString = settings["DnsServerAddress"];
+            dnsServerAddressString = settings["DnsServerAddress"] ?? "8.8.8.8";
             Console.Write("Using DNS server address from settings file: ");
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(dnsServerAddressString);
