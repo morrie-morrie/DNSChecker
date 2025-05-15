@@ -1,5 +1,4 @@
-﻿using DNSChecker.Helpers;
-using DnsChecker.Entities;
+﻿using DnsChecker.Entities;
 using DnsClient;
 using Serilog;
 using System.Net;
