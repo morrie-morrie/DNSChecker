@@ -7,7 +7,9 @@
     <Nullable>enable</Nullable>
     <ApplicationIcon>Resources\domain_check_icon.ico</ApplicationIcon>
     <Title>DNSChecker</Title>
-	<Version>1.0.1.5</Version>
+    <Version>1.1.0.0</Version>
+    <Description>DNS record checker utility for domain management</Description>
+    <Authors>TechnoHosting</Authors>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +22,7 @@
     <PackageReference Include="CsvHelper" Version="33.0.1" />
     <PackageReference Include="DnsClient" Version="1.8.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.5" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.5" />
     <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="9.0.5" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.5" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -29,17 +32,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\DNSChecker.Library\DNSChecker.Library.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 
-	<Target Name="PostPublishActions" AfterTargets="Publish">
-		<Exec Command="if not exist &quot;$(PublishDir)\Logs&quot; mkdir &quot;$(PublishDir)\Logs&quot;" />
-	</Target>
+  <Target Name="PostPublishActions" AfterTargets="Publish">
+    <Exec Command="if not exist &quot;$(PublishDir)\Logs&quot; mkdir &quot;$(PublishDir)\Logs&quot;" />
+  </Target>
 
 </Project>

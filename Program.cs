@@ -1,11 +1,15 @@
 ﻿using DnsChecker.Entities;
-using DnsClient;
-using Serilog;
-using System.Net;
-using System.Reflection;
 using DnsChecker.Helpers;
+using DnsClient;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using Serilog;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Reflection;
+using System.Threading.Tasks;
 
 namespace DnsChecker;
 
@@ -13,133 +17,235 @@ public static class Program
 {
     private static async Task Main(string[] args)
     {
-        var configuration = new ConfigurationBuilder()
-           .SetBasePath(Directory.GetCurrentDirectory())
-           .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-           .Build();
-
-        Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
-            .WriteTo.File(Path.Combine("Logs", "log.txt"), rollingInterval: RollingInterval.Day)
-            .CreateLogger();
-
-        Log.Information("---------------------");
-        Log.Information("Application started");
-
-        var version = Assembly.GetExecutingAssembly().GetName().Version;
-        Console.WriteLine();
-        Console.WriteLine($"Application Version: {version}");
-        Console.WriteLine();
-
-        // Read the settings file
-        string settingsFilePath = "settings.json";
-        string dnsServerAddressString;
-        if (File.Exists(settingsFilePath))
+        try
         {
-            var settings = new ConfigurationBuilder()
+            // Set up configuration
+            var configuration = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile(settingsFilePath, optional: true, reloadOnChange: true)
+                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .Build();
-            dnsServerAddressString = settings["DnsServerAddress"] ?? "8.8.8.8";
-            Console.Write("Using DNS server address from settings file: ");
+
+            // Set up logging
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Information()
+                .WriteTo.Console() // Add console logging
+                .WriteTo.File(Path.Combine("Logs", "log-.txt"), rollingInterval: RollingInterval.Day)
+                .CreateLogger();
+
+            Log.Information("---------------------");
+            Log.Information("Application started");
+
+            var version = Assembly.GetExecutingAssembly().GetName().Version;
+            Console.WriteLine();
+            Console.WriteLine($"DNS Checker - Version: {version}");
+            Console.WriteLine();
+
+            // Get DNS server from configuration
+            string dnsServerAddressString = configuration["DnsServerAddress"] ?? "8.8.8.8";
+            
+            // Prepare for DNS server selection
+            Console.Write($"Using DNS server address from configuration: ");
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(dnsServerAddressString);
             Console.ResetColor();
-            Log.Information("Using DNS server address from settings file: {DnsServerAddress}", dnsServerAddressString);
+            Log.Information("Using DNS server address: {DnsServerAddress}", dnsServerAddressString);
+
+            // Prompt for DNS server change
+            Console.WriteLine($"Do you want to use a different DNS server? (Y/N)");
+            string? response = Console.ReadLine()?.Trim().ToUpper();
+
+            var dnsServerAddress = IPAddress.Parse(dnsServerAddressString);
+
+            if (response == "Y")
+            {
+                Console.Write("Enter the new DNS server IP address: ");
+                string? dnsInput = Console.ReadLine()?.Trim();
+                if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
+                {
+                    dnsServerAddress = parsedAddress;
+                    Log.Information("Using custom DNS server {DnsServerAddress}", dnsServerAddress);
+                }
+                else
+                {
+                    Console.WriteLine("Invalid IP address. Using the configuration DNS server.");
+                    Log.Warning("Invalid DNS server IP entered, using configuration value");
+                }
+            }
+
+            // Set up DNS client with timeout
+            var clientOptions = new LookupClientOptions(dnsServerAddress)
+            {
+                Timeout = TimeSpan.FromSeconds(5), // Slightly longer timeout
+                UseCache = true,
+                Retries = 2
+            };
+
+            var client = new LookupClient(clientOptions);
+
+            // Get target servers from configuration
+            var targetNsServers = configuration.GetSection("TargetNsServers").Get<List<string>>() ?? 
+                new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
+
+            var targetARecords = configuration.GetSection("TargetARecords").Get<List<string>>() ?? 
+                new List<string> { "103.116.1.1", "103.116.1.2", "43.245.72.13" };
+
+            // Main application loop
+            while (true)
+            {
+                Console.WriteLine();
+                Console.WriteLine("Options:");
+                Console.WriteLine("  i - Check individual domain (default)");
+                Console.WriteLine("  d - Process domains from CSV file");
+                Console.WriteLine("  q - Quit application");
+                Console.Write("Enter your choice: ");
+                
+                var choice = Console.ReadLine()?.Trim().ToLower();
+
+                Log.Information("User choice: {choice}", choice);
+
+                if (string.IsNullOrEmpty(choice) || choice == "i")
+                {
+                    await CheckIndividualDomain(client, targetNsServers, targetARecords);
+                }
+                else if (choice == "d")
+                {
+                    await ProcessCsvFile(client, targetNsServers, targetARecords, configuration);
+                }
+                else if (choice == "q")
+                {
+                    Console.WriteLine("Exiting program.");
+                    Log.Information("User chose to exit the program");
+                    break; // Exits the while loop and ends the program
+                }
+                else
+                {
+                    Console.WriteLine("Invalid choice. Please enter 'i', 'd', or 'q'.");
+                    Log.Information("Invalid choice");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Unhandled exception: {ex.Message}");
+            Console.ResetColor();
+            Log.Fatal(ex, "Application terminated unexpectedly");
+        }
+        finally
+        {
+            Log.CloseAndFlush();
+        }
+    }
+
+    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords)
+    {
+        Console.Write("Enter the domain to check: ");
+        var domain = Console.ReadLine()?.Trim();
+
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            Console.WriteLine("No domain entered.");
+            Log.Information("No domain entered");
+            return;
+        }
+
+        Console.WriteLine($"Checking individual domain: {domain}");
+        Log.Information("Checking individual domain: {domain}", domain);
+        
+        try
+        {
+            var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
+            DisplayDomainResult(result, client);
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error checking domain {domain}: {ex.Message}");
+            Console.ResetColor();
+            Log.Error(ex, "Error checking domain {domain}", domain);
+        }
+    }
+
+    private static void DisplayDomainResult(DomainCheckResult result, LookupClient client)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"Domain: {result.Domain}");
+
+        if (result.IsBroken)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"DNS Error: {result.ErrorReason ?? "Unknown error"}");
+            Console.ResetColor();
+            return;
+        }
+
+        // Display NS Records
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine();
+        Console.Write("NS Match: ");
+        Console.ForegroundColor = result.NsMatch ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine(result.NsMatch);
+        Console.ResetColor();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("NS Records:");
+        Console.ResetColor();
+        if (result.NsRecords != null && result.NsRecords.Count > 0)
+        {
+            foreach (var ns in result.NsRecords)
+            {
+                Console.WriteLine($"  {ns}");
+            }
         }
         else
         {
-            dnsServerAddressString = "8.8.8.8"; // Default if settings file doesn't exist
-            Console.WriteLine("Using default DNS server address: {0}", dnsServerAddressString);
-            Log.Information("Using default DNS server address: {DnsServerAddress}", dnsServerAddressString);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  No NS records found");
+            Console.ResetColor();
         }
 
-        var dnsServerAddress = IPAddress.Parse(dnsServerAddressString);
-        Console.WriteLine($"The current DNS server is {dnsServerAddress}. Do you want to use a different one? (Y/N)");
-        string? response = Console.ReadLine()?.Trim().ToUpper();
+        // Display A Records
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine();
+        Console.Write("A Match: ");
+        Console.ResetColor();
+        Console.ForegroundColor = result.AMatch ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine(result.AMatch);
+        Console.ResetColor();
+        Console.WriteLine($"A Records for {result.Domain}:");
 
-        if (response == "Y")
+        if (result.ARecords != null && result.ARecords.Count > 0)
         {
-            Console.Write("Enter the new DNS server IP address: ");
-            string? dnsInput = Console.ReadLine()?.Trim();
-            if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
+            foreach (var ip in result.ARecords)
             {
-                dnsServerAddress = parsedAddress;
-                Log.Information("Using DNS server {DnsServerAddress}", dnsServerAddress);
+                Console.Write($"  {ip}");
 
-                // Save the new DNS server address to the settings file
-                var settings = new { DnsServerAddress = dnsServerAddress.ToString() };
-                string json = JsonConvert.SerializeObject(settings, Formatting.Indented);
-                File.WriteAllText(settingsFilePath, json);
-            }
-            else
-            {
-                Console.WriteLine("Invalid IP address. Using the current DNS server.");
+                if (ServerNameHelper.ServerNames.TryGetValue(ip, out var serverName))
+                {
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.Write($" (running on our {serverName})");
+                    Console.ResetColor();
+                }
+                Console.WriteLine();
             }
         }
-
-        var clientOptions = new LookupClientOptions(dnsServerAddress)
+        else
         {
-            Timeout = TimeSpan.FromSeconds(4)
-        };
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  No A records found");
+            Console.ResetColor();
+        }
 
-        var client = new LookupClient(clientOptions);
-
-        var targetNsServers = new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
-        var targetARecords = new List<string> { "103.116.1.1", "103.116.1.2", "43.245.72.13" };
-
-        while (true)
+        // Display www A Records
+        var wwwDomain = $"www.{result.Domain}";
+        Console.WriteLine($"A Records for {wwwDomain}:");
+        try
         {
-            Console.WriteLine();
-            Console.WriteLine("Do you want to check an individual domain ('i'), the domain.csv file ('d'), or exit ('q')? Press Enter for 'i'.");
-            var choice = Console.ReadLine()?.Trim().ToLower();
+            var wwwResponse = client.Query(wwwDomain, QueryType.A);
+            var wwwARecords = wwwResponse.Answers.ARecords().Select(r => r.Address.ToString()).ToList();
 
-            Log.Information("User choice: {choice}", choice);
-
-            if (string.IsNullOrEmpty(choice) || choice == "i")
+            if (wwwARecords.Count > 0)
             {
-                Console.Write("Enter the domain to check: ");
-                var domain = Console.ReadLine()?.Trim();
-
-                if (string.IsNullOrWhiteSpace(domain))
-                {
-                    Console.WriteLine("No domain entered.");
-                    Log.Information("No domain entered");
-                    continue; // Skip to next iteration of the loop
-                }
-
-                Console.WriteLine($"Checking individual domain: {domain}");
-                Log.Information("Checking individual domain: {domain}", domain);
-                var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
-
-                Console.WriteLine();
-                Console.WriteLine($"Domain: {result.Domain}");
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine();
-                Console.Write("NS Match: ");
-                Console.ForegroundColor = result.NsMatch ? ConsoleColor.Green : ConsoleColor.Red;
-                Console.WriteLine(result.NsMatch);
-                Console.ResetColor();
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine("NS Records:");
-                Console.ResetColor();
-                if (result.NsRecords != null)
-                {
-                    foreach (var ns in result.NsRecords)
-                    {
-                        Console.WriteLine($"  {ns}");
-                    }
-                }
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine();
-                Console.Write("A Match: ");
-                Console.ResetColor();
-                Console.ForegroundColor = result.AMatch ? ConsoleColor.Green : ConsoleColor.Red;
-                Console.WriteLine(result.AMatch);
-                Console.ResetColor();
-                Console.WriteLine($"A Records for {result.Domain}:");
-
-                foreach (var ip in result.ARecords ?? new List<string>())
+                foreach (var ip in wwwARecords)
                 {
                     Console.Write($"  {ip}");
 
@@ -151,103 +257,145 @@ public static class Program
                     }
                     Console.WriteLine();
                 }
-
-                var wwwDomain = $"www.{domain}";
-                Console.WriteLine($"A Records for {wwwDomain}:");
-                try
-                {
-                    var wwwResponse = await client.QueryAsync(wwwDomain, QueryType.A);
-                    var wwwARecords = wwwResponse.Answers.ARecords().Select(r => r.Address.ToString()).ToList();
-
-                    foreach (var ip in wwwARecords)
-                    {
-                        Console.Write($"  {ip}");
-
-                        if (ServerNameHelper.ServerNames.TryGetValue(ip, out var serverName))
-                        {
-                            Console.ForegroundColor = ConsoleColor.Green;
-                            Console.Write($" (running on our {ServerNameHelper.ServerNames[ip]})");
-                            Console.ResetColor();
-                        }
-                        Console.WriteLine();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
-                    Log.Error(ex, "Error querying A records for {wwwDomain}", wwwDomain);
-                }
-                Console.ResetColor();
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine();
-                Console.Write("MX Match: ");
-                Console.ResetColor();
-                Console.ForegroundColor = result.MxMatch ? ConsoleColor.Green : ConsoleColor.Red;
-                Console.WriteLine(result.MxMatch);
-                Console.ResetColor();
-                Console.WriteLine("MX Records:");
-
-                if (result.MxRecords != null)
-                {
-                    foreach (var mxRecord in result.MxRecords)
-                    {
-                        Console.WriteLine($"  {mxRecord}");
-                    }
-                }
-                Console.WriteLine();
-                Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine("SPF Record:");
-                Console.ResetColor();
-
-                if (!string.IsNullOrEmpty(result.SpfRecord))
-                {
-                    Console.Write("  Valid: ");
-                    Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine(result.SpfValid);
-                    Console.ResetColor();
-                    Console.WriteLine("  Record:");
-                    Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
-                    Console.WriteLine($"    {result.SpfRecord}");
-                    Console.ResetColor();
-                }
-                else
-                {
-                    Console.ForegroundColor = ConsoleColor.Red;
-                    Console.WriteLine("  No SPF record found.");
-                    Console.ResetColor();
-                }
             }
-            else if (choice == "d")
+            else
             {
-                string inputFilePath = @"c:\techno\domains.csv";  // Path to the CSV file with domains
-                string outputFilePath = @"c:\techno\results.csv"; // Path to save the results
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"  No A records found for {wwwDomain}");
+                Console.ResetColor();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
+            Console.ResetColor();
+            Log.Error(ex, "Error querying A records for {wwwDomain}", wwwDomain);
+        }
 
-                List<string> domains = ReadDomainFromCsvHelper.ReadDomainsFromCsv(inputFilePath);
-                List<DomainCheckResult> results = new List<DomainCheckResult>();
+        // Display MX Records
+        Console.ResetColor();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine();
+        Console.Write("MX Match: ");
+        Console.ResetColor();
+        Console.ForegroundColor = result.MxMatch ? ConsoleColor.Green : ConsoleColor.Red;
+        Console.WriteLine(result.MxMatch);
+        Console.ResetColor();
+        Console.WriteLine("MX Records:");
 
-                foreach (var domain in domains)
+        if (result.MxRecords != null && result.MxRecords.Count > 0)
+        {
+            foreach (var mxRecord in result.MxRecords)
+            {
+                Console.WriteLine($"  {mxRecord}");
+            }
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("  No MX records found");
+            Console.ResetColor();
+        }
+
+        // Display SPF Record
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("SPF Record:");
+        Console.ResetColor();
+
+        if (!string.IsNullOrEmpty(result.SpfRecord))
+        {
+            Console.Write("  Valid: ");
+            Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.WriteLine(result.SpfValid);
+            Console.ResetColor();
+            Console.WriteLine("  Record:");
+            Console.ForegroundColor = result.SpfValid ? ConsoleColor.Green : ConsoleColor.Red;
+            Console.WriteLine($"    {result.SpfRecord}");
+            Console.ResetColor();
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine("  No SPF record found.");
+            Console.ResetColor();
+        }
+    }
+
+    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, IConfiguration configuration)
+    {
+        try
+        {
+            // Get CSV file paths from configuration
+            string inputFilePath = configuration.GetSection("CsvPaths:Input").Value ?? @"c:\techno\domains.csv";
+            string outputFilePath = configuration.GetSection("CsvPaths:Output").Value ?? @"c:\techno\results.csv";
+
+            // Ensure directories exist
+            Directory.CreateDirectory(Path.GetDirectoryName(outputFilePath));
+
+            List<string> domains = ReadDomainFromCsvHelper.ReadDomainsFromCsv(inputFilePath);
+            
+            if (domains.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine("No domains found to process.");
+                Console.ResetColor();
+                return;
+            }
+
+            Console.WriteLine($"Processing {domains.Count} domains...");
+            List<DomainCheckResult> results = new List<DomainCheckResult>();
+            int current = 0;
+            int total = domains.Count;
+
+            // Clear broken domains list before starting new batch
+            CheckAndMatchDomainHelper.ClearBrokenDomains();
+
+            foreach (var domain in domains)
+            {
+                current++;
+                Console.Write($"\rProcessing domain {current}/{total}: {domain.PadRight(30)}");
+                
+                try
                 {
                     var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords);
                     results.Add(result);
                 }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error processing domain {domain}", domain);
+                    // Create a result for the failed domain
+                    results.Add(new DomainCheckResult
+                    {
+                        Domain = domain,
+                        IsBroken = true,
+                        ErrorReason = $"Exception: {ex.Message}"
+                    });
+                }
+            }
 
-                CheckAndMatchDomainHelper.DisplayBrokenDomains();
-                Log.Information("All domains processed. Writing results to CSV");
-                ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results);
-                Log.Information("Export completed successfully");
-            }
-            else if (choice == "q")
-            {
-                Console.WriteLine("Exiting program.");
-                Log.Information("User chose to exit the program");
-                break; // Exits the while loop and ends the program
-            }
-            else
-            {
-                Console.WriteLine("Invalid choice. Please enter 'i' for individual, 'd' for CSV, or 'q' to exit.");
-                Log.Information("Invalid choice");
-            }
+            Console.WriteLine();
+            Console.WriteLine($"Completed processing {domains.Count} domains.");
+
+            // Display summary of issues found
+            CheckAndMatchDomainHelper.DisplayBrokenDomains();
+
+            // Export results to CSV
+            Log.Information("Writing results to CSV at {outputPath}", outputFilePath);
+            ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results);
+            
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"Results saved to: {outputFilePath}");
+            Console.ResetColor();
+            Log.Information("Export completed successfully");
         }
-        Log.CloseAndFlush();
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error processing CSV file: {ex.Message}");
+            Console.ResetColor();
+            Log.Error(ex, "Error processing CSV file");
+        }
     }
 }

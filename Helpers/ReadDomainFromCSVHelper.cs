@@ -1,34 +1,78 @@
-﻿namespace DnsChecker.Helpers;
+﻿using Serilog;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
-internal class ReadDomainFromCsvHelper
+namespace DnsChecker.Helpers;
+
+/// <summary>
+/// Helper class for reading domain names from CSV files.
+/// </summary>
+internal static class ReadDomainFromCsvHelper
 {
-    protected ReadDomainFromCsvHelper()
-    {
-    }
-
+    /// <summary>
+    /// Reads domain names from a CSV file.
+    /// </summary>
+    /// <param name="filePath">Path to the CSV file containing domain names</param>
+    /// <returns>A list of domain names read from the file</returns>
+    /// <exception cref="ArgumentException">Thrown when filePath is null or empty</exception>
+    /// <exception cref="FileNotFoundException">Thrown when the specified file doesn't exist</exception>
     public static List<string> ReadDomainsFromCsv(string filePath)
     {
+        if (string.IsNullOrWhiteSpace(filePath))
+            throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
+
         var domains = new List<string>();
+        
         try
         {
-            Console.Clear();
             Console.WriteLine($"Attempting to read domains from '{filePath}'...");
+            Log.Information("Reading domains from {FilePath}", filePath);
 
-            if (File.Exists(filePath))
+            if (!File.Exists(filePath))
             {
-                var lines = File.ReadAllLines(filePath);
-                domains.AddRange(lines);
-                Console.WriteLine($"Successfully read {lines.Length} domains.");
-                Console.WriteLine();
+                var message = $"File not found: {filePath}";
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine(message);
+                Console.ResetColor();
+                Log.Error("File not found: {FilePath}", filePath);
+                throw new FileNotFoundException(message, filePath);
             }
-            else
+
+            // Read all lines from the file
+            var lines = File.ReadAllLines(filePath);
+
+            // Process each line and add valid domains to the list
+            foreach (var line in lines)
             {
-                Console.WriteLine($"File not found: {filePath}");
+                var domain = line.Trim();
+                if (!string.IsNullOrWhiteSpace(domain))
+                {
+                    domains.Add(domain);
+                }
+            }
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"Successfully read {domains.Count} domains.");
+            Console.ResetColor();
+            Log.Information("Successfully read {Count} domains from {FilePath}", domains.Count, filePath);
+
+            // If no valid domains were found, display a warning
+            if (domains.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("Warning: No valid domains found in the file.");
+                Console.ResetColor();
+                Log.Warning("No valid domains found in {FilePath}", filePath);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not FileNotFoundException) // We already handle FileNotFoundException above
         {
+            Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error reading file: {ex.Message}");
+            Console.ResetColor();
+            Log.Error(ex, "Error reading domains from {FilePath}", filePath);
             throw;
         }
 

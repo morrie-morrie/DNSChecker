@@ -27,8 +27,14 @@ internal static class CheckAndMatchDomainHelper
     /// <param name="domain">Domain name to check</param>
     /// <param name="targetNs">List of target nameserver hostnames to match against</param>
     /// <param name="targetA">List of target IP addresses to match against</param>
+    /// <param name="targetMx">Optional list of target MX servers to match against</param>
     /// <returns>A DomainCheckResult containing the detailed results of the domain check</returns>
-    public static async Task<DomainCheckResult> CheckAndMatchDomain(LookupClient client, string domain, List<string> targetNs, List<string> targetA, List<string> targetMx = null)
+    public static async Task<DomainCheckResult> CheckAndMatchDomain(
+        LookupClient client, 
+        string domain, 
+        List<string> targetNs, 
+        List<string> targetA, 
+        List<string>? targetMx = null)
     {
         if (client == null) throw new ArgumentNullException(nameof(client));
         if (string.IsNullOrWhiteSpace(domain)) throw new ArgumentException("Domain cannot be empty", nameof(domain));
