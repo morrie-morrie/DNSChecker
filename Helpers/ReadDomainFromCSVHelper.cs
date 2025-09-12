@@ -28,7 +28,6 @@ internal static class ReadDomainFromCsvHelper
         try
         {
             Console.WriteLine($"Attempting to read domains from '{filePath}'...");
-            Log.Information("Reading domains from {FilePath}", filePath);
 
             if (!File.Exists(filePath))
             {
@@ -36,7 +35,6 @@ internal static class ReadDomainFromCsvHelper
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine(message);
                 Console.ResetColor();
-                Log.Error("File not found: {FilePath}", filePath);
                 throw new FileNotFoundException(message, filePath);
             }
 
@@ -56,7 +54,6 @@ internal static class ReadDomainFromCsvHelper
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Successfully read {domains.Count} domains.");
             Console.ResetColor();
-            Log.Information("Successfully read {Count} domains from {FilePath}", domains.Count, filePath);
 
             // If no valid domains were found, display a warning
             if (domains.Count == 0)
@@ -64,7 +61,6 @@ internal static class ReadDomainFromCsvHelper
                 Console.ForegroundColor = ConsoleColor.Yellow;
                 Console.WriteLine("Warning: No valid domains found in the file.");
                 Console.ResetColor();
-                Log.Warning("No valid domains found in {FilePath}", filePath);
             }
         }
         catch (Exception ex) when (ex is not FileNotFoundException) // We already handle FileNotFoundException above
@@ -72,7 +68,6 @@ internal static class ReadDomainFromCsvHelper
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error reading file: {ex.Message}");
             Console.ResetColor();
-            Log.Error(ex, "Error reading domains from {FilePath}", filePath);
             throw;
         }
 

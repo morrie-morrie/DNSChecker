@@ -167,7 +167,9 @@ internal static class CheckAndMatchDomainHelper
         {
             // Fallback display if console operations fail
             Console.WriteLine($"Checking domain: {domain}");
-            Log.Warning(ex, "Error when displaying domain in console");
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Warning: Error when displaying domain in console: {ex.Message}");
+            Console.ResetColor();
         }
     }
 
@@ -186,13 +188,13 @@ internal static class CheckAndMatchDomainHelper
                 Console.WriteLine(domain);
                 Console.ResetColor();
             }
-            
-            Log.Warning("Found {count} domains with DNS query failures", BrokenDomains.Count);
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Found {BrokenDomains.Count} domains with DNS query failures");
+            Console.ResetColor();
         }
         else
         {
             Console.WriteLine("\nThere were no domains with failed or timed out DNS queries.");
-            Log.Information("No domains with DNS query failures");
         }
     }
     
@@ -202,6 +204,8 @@ internal static class CheckAndMatchDomainHelper
     public static void ClearBrokenDomains()
     {
         BrokenDomains.Clear();
-        Log.Information("Cleared the list of broken domains");
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("Cleared the list of broken domains");
+        Console.ResetColor();
     }
 }

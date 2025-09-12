@@ -1,6 +1,5 @@
 ﻿using CsvHelper;
 using DnsChecker.Entities;
-using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -67,12 +66,16 @@ internal static class ExportToCsvHelper
                     csv.NextRecord();
                 }
 
-                Log.Information("Successfully wrote {Count} results to {FilePath}", results.Count, filePath);
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"Successfully wrote {results.Count} results to {filePath}");
+                Console.ResetColor();
             }
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Error exporting results to CSV at {FilePath}", filePath);
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error exporting results to CSV at {filePath}: {ex.Message}");
+            Console.ResetColor();
             throw;
         }
     }

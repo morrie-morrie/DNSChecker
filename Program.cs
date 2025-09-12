@@ -3,7 +3,6 @@ using DnsChecker.Helpers;
 using DnsClient;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
-using Serilog;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,15 +24,8 @@ public static class Program
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .Build();
 
-            // Set up logging
-            Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.Information()
-                .WriteTo.Console() // Add console logging
-                .WriteTo.File(Path.Combine("Logs", "log-.txt"), rollingInterval: RollingInterval.Day)
-                .CreateLogger();
-
-            Log.Information("---------------------");
-            Log.Information("Application started");
+            Console.WriteLine("---------------------");
+            Console.WriteLine("Application started");
 
             var version = Assembly.GetExecutingAssembly().GetName().Version;
             Console.WriteLine();
@@ -48,7 +40,6 @@ public static class Program
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine(dnsServerAddressString);
             Console.ResetColor();
-            Log.Information("Using DNS server address: {DnsServerAddress}", dnsServerAddressString);
 
             // Prompt for DNS server change
             Console.WriteLine($"Do you want to use a different DNS server? (Y/N)");
@@ -63,12 +54,11 @@ public static class Program
                 if (IPAddress.TryParse(dnsInput, out IPAddress? parsedAddress))
                 {
                     dnsServerAddress = parsedAddress;
-                    Log.Information("Using custom DNS server {DnsServerAddress}", dnsServerAddress);
+                    Console.WriteLine($"Using custom DNS server {dnsServerAddress}");
                 }
                 else
                 {
                     Console.WriteLine("Invalid IP address. Using the configuration DNS server.");
-                    Log.Warning("Invalid DNS server IP entered, using configuration value");
                 }
             }
 
@@ -101,8 +91,6 @@ public static class Program
                 
                 var choice = Console.ReadLine()?.Trim().ToLower();
 
-                Log.Information("User choice: {choice}", choice);
-
                 if (string.IsNullOrEmpty(choice) || choice == "i")
                 {
                     await CheckIndividualDomain(client, targetNsServers, targetARecords);
@@ -114,13 +102,11 @@ public static class Program
                 else if (choice == "q")
                 {
                     Console.WriteLine("Exiting program.");
-                    Log.Information("User chose to exit the program");
                     break; // Exits the while loop and ends the program
                 }
                 else
                 {
                     Console.WriteLine("Invalid choice. Please enter 'i', 'd', or 'q'.");
-                    Log.Information("Invalid choice");
                 }
             }
         }
@@ -129,11 +115,9 @@ public static class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Unhandled exception: {ex.Message}");
             Console.ResetColor();
-            Log.Fatal(ex, "Application terminated unexpectedly");
         }
         finally
         {
-            Log.CloseAndFlush();
         }
     }
 
@@ -145,12 +129,10 @@ public static class Program
         if (string.IsNullOrWhiteSpace(domain))
         {
             Console.WriteLine("No domain entered.");
-            Log.Information("No domain entered");
             return;
         }
 
         Console.WriteLine($"Checking individual domain: {domain}");
-        Log.Information("Checking individual domain: {domain}", domain);
         
         try
         {
@@ -162,7 +144,6 @@ public static class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error checking domain {domain}: {ex.Message}");
             Console.ResetColor();
-            Log.Error(ex, "Error checking domain {domain}", domain);
         }
     }
 
@@ -270,7 +251,6 @@ public static class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"  Error querying A records for {wwwDomain}: {ex.Message}");
             Console.ResetColor();
-            Log.Error(ex, "Error querying A records for {wwwDomain}", wwwDomain);
         }
 
         // Display MX Records
@@ -364,7 +344,6 @@ public static class Program
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error processing domain {domain}", domain);
                     // Create a result for the failed domain
                     results.Add(new DomainCheckResult
                     {
@@ -382,20 +361,18 @@ public static class Program
             CheckAndMatchDomainHelper.DisplayBrokenDomains();
 
             // Export results to CSV
-            Log.Information("Writing results to CSV at {outputPath}", outputFilePath);
+            Console.WriteLine("Writing results to CSV...");
             ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results);
             
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Results saved to: {outputFilePath}");
             Console.ResetColor();
-            Log.Information("Export completed successfully");
         }
         catch (Exception ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error processing CSV file: {ex.Message}");
             Console.ResetColor();
-            Log.Error(ex, "Error processing CSV file");
         }
     }
 }
