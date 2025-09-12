@@ -81,6 +81,31 @@ internal class DomainCheckResult
     public bool SpfValid { get; set; }
 
     /// <summary>
+    /// Gets or sets the DMARC record for the domain.
+    /// </summary>
+    public string? DmarcRecord { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether the DMARC record is valid (has a policy and is not empty).
+    /// </summary>
+    public bool DmarcValid { get; set; }
+
+    /// <summary>
+    /// Gets or sets the DKIM records for the domain (list of selectors found).
+    /// </summary>
+    public List<string>? DkimRecords { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether at least one DKIM record is valid (contains a public key).
+    /// </summary>
+    public bool DkimValid { get; set; }
+
+    /// <summary>
+    /// Gets or sets the DKIM results for the domain (selector, value, validity).
+    /// </summary>
+    public Dictionary<string, (string Value, bool IsValid)>? DkimSelectorResults { get; set; }
+
+    /// <summary>
     /// Converts an IP address to a user-friendly string with server name if available.
     /// </summary>
     /// <param name="ip">The IP address to convert</param>

@@ -60,7 +60,8 @@ internal static class CheckAndMatchDomainHelper
                 client.QueryAsync(domain, QueryType.NS),
                 client.QueryAsync(domain, QueryType.A),
                 client.QueryAsync(domain, QueryType.MX),
-                client.QueryAsync(domain, QueryType.TXT)
+                client.QueryAsync(domain, QueryType.TXT),
+                client.QueryAsync($"_dmarc.{domain}", QueryType.TXT)
             };
 
             // Wait for all queries to complete
@@ -70,6 +71,7 @@ internal static class CheckAndMatchDomainHelper
             var aResponse = responses[1];
             var mxResponse = responses[2];
             var txtResponse = responses[3];
+            var dmarcResponse = responses[4];
 
             // Process SPF records
             var spfParts = txtResponse.Answers.TxtRecords()
@@ -85,11 +87,44 @@ internal static class CheckAndMatchDomainHelper
                 .ToList();
 
             result.SpfRecord = string.Join("", spfParts);
-            
-            // Improved SPF validation - consider both -all (strict) and ~all (soft fail) as valid practices
             result.SpfValid = !string.IsNullOrEmpty(result.SpfRecord) && 
                              (result.SpfRecord.EndsWith("-all", StringComparison.OrdinalIgnoreCase) || 
                               result.SpfRecord.EndsWith("~all", StringComparison.OrdinalIgnoreCase));
+
+            // Process DMARC record
+            var dmarcTxt = dmarcResponse.Answers.TxtRecords().SelectMany(txt => txt.Text).FirstOrDefault(t => t.StartsWith("v=DMARC1", StringComparison.OrdinalIgnoreCase));
+            result.DmarcRecord = dmarcTxt;
+            result.DmarcValid = !string.IsNullOrEmpty(dmarcTxt) && dmarcTxt.Contains("p=", StringComparison.OrdinalIgnoreCase);
+
+            // Process DKIM records (try common selectors)
+            var commonSelectors = new[] { "default", "selector1", "selector2", "dkim", "google", "mail", "smtp", "key1", "key2" };
+            var dkimSelectors = new List<string>();
+            var dkimValid = false;
+            var dkimSelectorResults = new Dictionary<string, (string Value, bool IsValid)>();
+            foreach (var selector in commonSelectors)
+            {
+                try
+                {
+                    var dkimQuery = await client.QueryAsync($"{selector}._domainkey.{domain}", QueryType.TXT);
+                    foreach (var txt in dkimQuery.Answers.TxtRecords())
+                    {
+                        foreach (var text in txt.Text)
+                        {
+                            if (text.StartsWith("v=DKIM1", StringComparison.OrdinalIgnoreCase))
+                            {
+                                dkimSelectors.Add(selector);
+                                bool isValid = text.Contains("p=", StringComparison.OrdinalIgnoreCase);
+                                if (isValid) dkimValid = true;
+                                dkimSelectorResults[selector] = (text, isValid);
+                            }
+                        }
+                    }
+                }
+                catch { /* Ignore DNS errors for missing selectors */ }
+            }
+            result.DkimRecords = dkimSelectors;
+            result.DkimValid = dkimValid;
+            result.DkimSelectorResults = dkimSelectorResults;
 
             // Process records
             result.NsRecords = nsResponse.Answers.NsRecords()
@@ -106,13 +141,18 @@ internal static class CheckAndMatchDomainHelper
 
             // Check for matches with target servers
             result.NsMatch = targetNs.Any(ns => result.NsRecords.Contains(ns.ToLowerInvariant()));
-            result.AMatch = targetA.Any(ip => result.ARecords.Contains(ip));
+
+            // Normalize and deduplicate A records and targets (treat IPv4 strings case-insensitively even though case doesn't matter)
+            var normalizedTargetA = new HashSet<string>(targetA.Select(ip => ip.Trim()), StringComparer.OrdinalIgnoreCase);
+            var normalizedARecords = new HashSet<string>(result.ARecords.Select(ip => ip.Trim()), StringComparer.OrdinalIgnoreCase);
+            result.AMatch = normalizedARecords.Overlaps(normalizedTargetA);
             
             // Add MX matching if target MX servers are provided
             if (targetMx != null && targetMx.Count > 0)
             {
                 var normalizedTargetMx = targetMx.Select(mx => mx.ToLowerInvariant().TrimEnd('.')).ToList();
-                result.MxMatch = normalizedTargetMx.Any(mx => result.MxRecords.Contains(mx));
+                // Check if any MX record contains any target MX substring
+                result.MxMatch = result.MxRecords.Any(mxRecord => normalizedTargetMx.Any(target => mxRecord.Contains(target)));
             }
         }
         catch (DnsResponseException ex)

@@ -14,6 +14,7 @@ internal static class ServerNameHelper
     {
         { "103.116.1.1", "CP10" },
         { "103.116.1.2", "CP11" },
+        { "103.116.1.4", "CP12" },
         { "43.245.72.13", "CP99" }
         // Add other server mappings here
     };
