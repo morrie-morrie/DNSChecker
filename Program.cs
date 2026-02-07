@@ -18,13 +18,6 @@ public static class Program
     {
         try
         {
-            // Set terminal window height (increase vertical size)
-            try
-            {
-                Console.WindowHeight = 100; // You can adjust this value as needed
-            }
-            catch { /* Ignore if not supported or out of range */ }
-
             // Set up configuration
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
@@ -422,7 +415,11 @@ public static class Program
             string outputFilePath = configuration.GetSection("CsvPaths:Output").Value ?? @"c:\techno\results.csv";
 
             // Ensure directories exist
-            Directory.CreateDirectory(Path.GetDirectoryName(outputFilePath));
+            var outputDir = Path.GetDirectoryName(outputFilePath);
+                if (!string.IsNullOrEmpty(outputDir))
+                    {
+                    Directory.CreateDirectory(outputDir);
+                    }
 
             List<string> domains = ReadDomainFromCsvHelper.ReadDomainsFromCsv(inputFilePath);
             
