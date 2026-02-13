@@ -4,6 +4,7 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,10 +15,8 @@ namespace DnsChecker.Helpers;
 /// </summary>
 internal static class CheckAndMatchDomainHelper
 {
-    /// <summary>
-    /// List of domains where DNS queries failed or timed out.
-    /// </summary>
-    internal static readonly List<string> BrokenDomains = new();
+    private static readonly List<string> BrokenDomains = new();
+    private static readonly object BrokenDomainsLock = new();
 
     // This is a static class - no need for constructor comment
 
@@ -30,7 +29,12 @@ internal static class CheckAndMatchDomainHelper
     /// <param name="targetA">List of target IP addresses to match against</param>
     /// <param name="targetMx">Optional list of target MX servers to match against</param>
     /// <param name="perQueryTimeout">Timeout applied to each DNS query</param>
+    /// <param name="retryMaxAttempts">Maximum retry attempts for transient DNS failures</param>
+    /// <param name="retryBaseDelayMilliseconds">Base delay for exponential backoff retries</param>
     /// <param name="cancellationToken">Cancellation token for the overall domain check</param>
+    /// <param name="displayProgress">Whether to display progress output for the domain</param>
+    /// <param name="itemNumber">Current item number for progress display</param>
+    /// <param name="totalItems">Total items for progress display</param>
     /// <returns>A DomainCheckResult containing the detailed results of the domain check</returns>
     public static async Task<DomainCheckResult> CheckAndMatchDomain(
         LookupClient client, 
@@ -39,16 +43,26 @@ internal static class CheckAndMatchDomainHelper
         List<string> targetA, 
         List<string>? targetMx,
         TimeSpan perQueryTimeout,
-        CancellationToken cancellationToken)
+        int retryMaxAttempts,
+        int retryBaseDelayMilliseconds,
+        CancellationToken cancellationToken,
+        bool displayProgress,
+        int itemNumber,
+        int totalItems)
     {
         ArgumentNullException.ThrowIfNull(client);
         if (string.IsNullOrWhiteSpace(domain)) throw new ArgumentException("Domain cannot be empty", nameof(domain));
         ArgumentNullException.ThrowIfNull(targetNs);
         ArgumentNullException.ThrowIfNull(targetA);
         if (perQueryTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(perQueryTimeout));
+        if (retryMaxAttempts <= 0) throw new ArgumentOutOfRangeException(nameof(retryMaxAttempts));
+        if (retryBaseDelayMilliseconds < 0) throw new ArgumentOutOfRangeException(nameof(retryBaseDelayMilliseconds));
 
         domain = domain.Trim().ToLowerInvariant();
-        DisplayCurrentDomain(domain);
+        if (displayProgress)
+        {
+            DisplayCurrentDomain(domain, itemNumber, totalItems);
+        }
 
         var result = new DomainCheckResult
         {
@@ -65,11 +79,11 @@ internal static class CheckAndMatchDomainHelper
             // Execute DNS queries in parallel for better performance
             var queries = new[]
             {
-                ExecuteQueryAsync(client, domain, QueryType.NS, "NS", perQueryTimeout, cancellationToken),
-                ExecuteQueryAsync(client, domain, QueryType.A, "A", perQueryTimeout, cancellationToken),
-                ExecuteQueryAsync(client, domain, QueryType.MX, "MX", perQueryTimeout, cancellationToken),
-                ExecuteQueryAsync(client, domain, QueryType.TXT, "SPF", perQueryTimeout, cancellationToken),
-                ExecuteQueryAsync(client, $"_dmarc.{domain}", QueryType.TXT, "DMARC", perQueryTimeout, cancellationToken)
+                ExecuteQueryAsync(client, domain, QueryType.NS, "NS", perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.A, "A", perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.MX, "MX", perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.TXT, "SPF", perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, cancellationToken),
+                ExecuteQueryAsync(client, $"_dmarc.{domain}", QueryType.TXT, "DMARC", perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, cancellationToken)
             };
 
             // Wait for all queries to complete
@@ -142,6 +156,8 @@ internal static class CheckAndMatchDomainHelper
                     QueryType.TXT,
                     $"DKIM ({selector})",
                     perQueryTimeout,
+                    retryMaxAttempts,
+                    retryBaseDelayMilliseconds,
                     cancellationToken).ConfigureAwait(false);
 
                 if (!string.IsNullOrWhiteSpace(dkimResult.Error))
@@ -208,14 +224,14 @@ internal static class CheckAndMatchDomainHelper
             Log.Error(ex, "DNS query failed for {domain}. Status: {errorCode}", domain, ex.Code);
             result.IsBroken = true;
             result.ErrorReason = $"DNS query failed: {ex.Message}";
-            BrokenDomains.Add(domain);
+            AddBrokenDomain(domain);
         }
         catch (OperationCanceledException ex)
         {
             Log.Error(ex, "DNS query timed out for {domain}.", domain);
             result.IsBroken = true;
             result.ErrorReason = "DNS query timed out";
-            BrokenDomains.Add(domain);
+            AddBrokenDomain(domain);
         }
         return result;
     }
@@ -226,34 +242,74 @@ internal static class CheckAndMatchDomainHelper
         QueryType queryType,
         string queryLabel,
         TimeSpan timeout,
+        int retryMaxAttempts,
+        int retryBaseDelayMilliseconds,
         CancellationToken cancellationToken)
     {
-        var queryTask = client.QueryAsync(queryName, queryType);
-        var delayTask = Task.Delay(timeout, cancellationToken);
+        for (var attempt = 1; attempt <= retryMaxAttempts; attempt++)
+        {
+            var queryTask = client.QueryAsync(queryName, queryType);
+            var delayTask = Task.Delay(timeout, cancellationToken);
 
-        var completedTask = await Task.WhenAny(queryTask, delayTask).ConfigureAwait(false);
-        if (completedTask == delayTask)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Log.Warning("DNS query timed out for {queryLabel} on {domain}.", queryLabel, queryName);
-            return new QueryResult(null, $"{queryLabel} query timed out");
+            var completedTask = await Task.WhenAny(queryTask, delayTask).ConfigureAwait(false);
+            if (completedTask == delayTask)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (attempt == retryMaxAttempts)
+                {
+                    Log.Warning("DNS query timed out for {queryLabel} on {domain}.", queryLabel, queryName);
+                    return new QueryResult(null, $"{queryLabel} query timed out");
+                }
+            }
+            else
+            {
+                try
+                {
+                    var response = await queryTask.ConfigureAwait(false);
+                    return new QueryResult(response, null);
+                }
+                catch (DnsResponseException ex)
+                {
+                    Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}. Status: {errorCode}", queryLabel, queryName, ex.Code);
+                    if (attempt == retryMaxAttempts)
+                    {
+                        return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+                    }
+                }
+                catch (InvalidOperationException ex)
+                {
+                    Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}.", queryLabel, queryName);
+                    if (attempt == retryMaxAttempts)
+                    {
+                        return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+                    }
+                }
+                catch (SocketException ex)
+                {
+                    Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}.", queryLabel, queryName);
+                    if (attempt == retryMaxAttempts)
+                    {
+                        return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+                    }
+                }
+                catch (TimeoutException ex)
+                {
+                    Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}.", queryLabel, queryName);
+                    if (attempt == retryMaxAttempts)
+                    {
+                        return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+                    }
+                }
+            }
+
+            if (retryBaseDelayMilliseconds > 0)
+            {
+                var delay = TimeSpan.FromMilliseconds(retryBaseDelayMilliseconds * Math.Pow(2, attempt - 1));
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
         }
 
-        try
-        {
-            var response = await queryTask.ConfigureAwait(false);
-            return new QueryResult(response, null);
-        }
-        catch (DnsResponseException ex)
-        {
-            Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}. Status: {errorCode}", queryLabel, queryName, ex.Code);
-            return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
-        }
-        catch (Exception ex)
-        {
-            Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}.", queryLabel, queryName);
-            return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
-        }
+        return new QueryResult(null, $"{queryLabel} query failed");
     }
 
     private readonly record struct QueryResult(IDnsQueryResponse? Response, string? Error);
@@ -262,13 +318,16 @@ internal static class CheckAndMatchDomainHelper
     /// Displays the current domain being checked in the console.
     /// </summary>
     /// <param name="domain">Domain name to display</param>
-    public static void DisplayCurrentDomain(string domain)
+    /// <param name="itemNumber">Current item number for progress display</param>
+    /// <param name="totalItems">Total items for progress display</param>
+    public static void DisplayCurrentDomain(string domain, int itemNumber, int totalItems)
     {
         try
         {
             // Reset color for the prefix text
             Console.ResetColor();
-            Console.Write("\rChecking domain: ");
+            var prefix = $"Checking domain {itemNumber}/{totalItems}: ";
+            Console.Write("\r" + prefix);
 
             // Set color to light blue for the domain name
             Console.ForegroundColor = ConsoleColor.Cyan;
@@ -277,7 +336,8 @@ internal static class CheckAndMatchDomainHelper
             int consoleWidth = 80;
             try { consoleWidth = Console.WindowWidth; } catch { /* Use default width if console width isn't available */ }
             
-            Console.Write(domain.PadRight(consoleWidth - "Checking domain: ".Length - 1));
+            var availableWidth = Math.Max(1, consoleWidth - prefix.Length - 1);
+            Console.Write(domain.PadRight(availableWidth));
 
             // Reset color back to default after writing the domain
             Console.ResetColor();
@@ -285,10 +345,26 @@ internal static class CheckAndMatchDomainHelper
         catch (Exception ex)
         {
             // Fallback display if console operations fail
-            Console.WriteLine($"Checking domain: {domain}");
+            Console.WriteLine($"Checking domain {itemNumber}/{totalItems}: {domain}");
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"Warning: Error when displaying domain in console: {ex.Message}");
             Console.ResetColor();
+        }
+    }
+
+    /// <summary>
+    /// Adds a domain to the broken domain list.
+    /// </summary>
+    /// <param name="domain">Domain name to add</param>
+    public static void AddBrokenDomain(string domain)
+    {
+        if (string.IsNullOrWhiteSpace(domain))
+        {
+            throw new ArgumentException("Domain cannot be empty", nameof(domain));
+        }
+        lock (BrokenDomainsLock)
+        {
+            BrokenDomains.Add(domain);
         }
     }
 
@@ -297,18 +373,24 @@ internal static class CheckAndMatchDomainHelper
     /// </summary>
     public static void DisplayBrokenDomains()
     {
-        if (BrokenDomains.Count > 0)
+        List<string> snapshot;
+        lock (BrokenDomainsLock)
+        {
+            snapshot = BrokenDomains.ToList();
+        }
+
+        if (snapshot.Count > 0)
         {
             Console.WriteLine();
             Console.WriteLine("\nDomains where DNS query failed or timed out:");
-            foreach (var domain in BrokenDomains)
+            foreach (var domain in snapshot)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine(domain);
                 Console.ResetColor();
             }
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Found {BrokenDomains.Count} domains with DNS query failures");
+            Console.WriteLine($"Found {snapshot.Count} domains with DNS query failures");
             Console.ResetColor();
         }
         else
@@ -322,7 +404,10 @@ internal static class CheckAndMatchDomainHelper
     /// </summary>
     public static void ClearBrokenDomains()
     {
-        BrokenDomains.Clear();
+        lock (BrokenDomainsLock)
+        {
+            BrokenDomains.Clear();
+        }
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("Cleared the list of broken domains");
         Console.ResetColor();

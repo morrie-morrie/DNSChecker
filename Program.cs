@@ -1,5 +1,6 @@
 ﻿using DnsChecker.Entities;
 using DnsChecker.Helpers;
+using DnsChecker.Resources;
 using DnsClient;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
@@ -7,8 +8,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Reflection;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +19,8 @@ namespace DnsChecker;
 
 public static class Program
 {
+    private static int ProgressLineLength;
+
     private static async Task Main(string[] args)
     {
         try
@@ -45,7 +50,7 @@ public static class Program
 
             // Prompt for DNS server change
             Console.WriteLine($"Do you want to use a different DNS server? (Y/N)");
-            string? response = Console.ReadLine()?.Trim().ToUpper();
+            string? response = Console.ReadLine()?.Trim().ToUpperInvariant();
 
             if (!IPAddress.TryParse(dnsServerAddressString, out IPAddress? dnsServerAddress))
             {
@@ -89,6 +94,27 @@ public static class Program
             var perQueryTimeout = TimeSpan.FromSeconds(perQueryTimeoutSeconds);
             var perDomainTimeout = TimeSpan.FromSeconds(perDomainTimeoutSeconds);
 
+            var maxParallelism = configuration.GetValue("Parallelism:MaxParallelism", 4);
+            if (maxParallelism <= 0)
+            {
+                maxParallelism = 4;
+            }
+
+            var retryMaxAttempts = configuration.GetValue("Retries:MaxAttempts", 3);
+            if (retryMaxAttempts <= 0)
+            {
+                retryMaxAttempts = 1;
+            }
+
+            var retryBaseDelayMilliseconds = configuration.GetValue("Retries:BaseDelayMilliseconds", 250);
+            if (retryBaseDelayMilliseconds < 0)
+            {
+                retryBaseDelayMilliseconds = 0;
+            }
+
+            var resumeEnabled = configuration.GetValue("Resume:Enabled", true);
+            var resumeCachePath = configuration.GetValue<string>("Resume:CachePath") ?? @"c:\techno\processed-domains.txt";
+
             // Set up DNS client with timeout
             var clientOptions = new LookupClientOptions(dnsServerAddress)
             {
@@ -100,7 +126,7 @@ public static class Program
             var client = new LookupClient(clientOptions);
 
             // Get target servers from configuration
-            var targetNsServers = configuration.GetSection("TargetNsServers").Get<List<string>>() ?? 
+            var targetNsServers = configuration.GetSection("TargetNsServers").Get<List<string>>() ??
                 new List<string> { "ns1.technohosting.com.au", "ns2.technohosting.com.au" };
 
             // Use TargetARecords from configuration, falling back to defaults only if missing
@@ -120,20 +146,32 @@ public static class Program
                 Console.WriteLine("  q - Quit application");
                 Console.Write("Enter your choice: ");
                 
-                var choice = Console.ReadLine()?.Trim().ToLower();
+                var choice = Console.ReadLine()?.Trim().ToLowerInvariant();
 
                 if (string.IsNullOrEmpty(choice) || choice == "i")
                 {
-                    await CheckIndividualDomain(client, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, perDomainTimeout);
+                    await CheckIndividualDomain(client, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, perDomainTimeout, retryMaxAttempts, retryBaseDelayMilliseconds);
                 }
                 else if (choice == "d")
                 {
-                    await ProcessCsvFile(client, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, perDomainTimeout, configuration);
+                    await ProcessCsvFile(
+                        client,
+                        targetNsServers,
+                        targetARecords,
+                        targetMxServers,
+                        perQueryTimeout,
+                        perDomainTimeout,
+                        retryMaxAttempts,
+                        retryBaseDelayMilliseconds,
+                        maxParallelism,
+                        resumeEnabled,
+                        resumeCachePath,
+                        configuration);
                 }
                 else if (choice == "q")
                 {
                     Console.WriteLine("Exiting program.");
-                    break; // Exits the while loop and ends the program
+                    break;
                 }
                 else
                 {
@@ -141,18 +179,184 @@ public static class Program
                 }
             }
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"Unhandled exception: {ex.Message}");
+            Console.WriteLine($"Configuration error: {ex.Message}");
             Console.ResetColor();
         }
-        finally
+        catch (InvalidOperationException ex)
         {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Operation error: {ex.Message}");
+            Console.ResetColor();
+        }
+        catch (IOException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"I/O error: {ex.Message}");
+            Console.ResetColor();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Access error: {ex.Message}");
+            Console.ResetColor();
         }
     }
 
-    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, TimeSpan perQueryTimeout, TimeSpan perDomainTimeout)
+    private static async Task<List<DomainCheckResult>> ProcessDomainBatchAsync(
+        List<string> domains,
+        LookupClient client,
+        List<string> targetNsServers,
+        List<string> targetARecords,
+        List<string> targetMxServers,
+        TimeSpan perQueryTimeout,
+        TimeSpan perDomainTimeout,
+        int retryMaxAttempts,
+        int retryBaseDelayMilliseconds,
+        int maxParallelism,
+        bool updateResumeCache,
+        string resumeCachePath,
+        bool displayProgress)
+    {
+        var results = new ConcurrentBag<DomainCheckResult>();
+        var total = domains.Count;
+        var completed = 0;
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = maxParallelism
+        };
+
+        var progressLock = new object();
+        var resumeLock = new object();
+
+        await Parallel.ForEachAsync(domains, parallelOptions, async (domain, cancellationToken) =>
+        {
+            if (!TryNormalizeDomain(domain, out var normalizedDomain, out var errorMessage))
+            {
+                CheckAndMatchDomainHelper.AddBrokenDomain(domain);
+                results.Add(new DomainCheckResult
+                {
+                    Domain = domain,
+                    IsBroken = true,
+                    ErrorReason = errorMessage
+                });
+                if (updateResumeCache)
+                {
+                    AppendResumeCache(resumeCachePath, domain, resumeLock);
+                }
+                UpdateProgress(displayProgress, ref completed, total, domain, progressLock);
+                return;
+            }
+
+            try
+            {
+                using var domainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                domainCts.CancelAfter(perDomainTimeout);
+                var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(
+                    client,
+                    normalizedDomain,
+                    targetNsServers,
+                    targetARecords,
+                    targetMxServers,
+                    perQueryTimeout,
+                    retryMaxAttempts,
+                    retryBaseDelayMilliseconds,
+                    domainCts.Token,
+                    false,
+                    0,
+                    total).ConfigureAwait(false);
+                results.Add(result);
+            }
+            catch (InvalidOperationException ex)
+            {
+                results.Add(new DomainCheckResult
+                {
+                    Domain = domain,
+                    IsBroken = true,
+                    ErrorReason = $"Exception: {ex.Message}"
+                });
+            }
+            catch (OperationCanceledException ex)
+            {
+                results.Add(new DomainCheckResult
+                {
+                    Domain = domain,
+                    IsBroken = true,
+                    ErrorReason = $"Exception: {ex.Message}"
+                });
+            }
+            finally
+            {
+                if (updateResumeCache)
+                {
+                    AppendResumeCache(resumeCachePath, domain, resumeLock);
+                }
+                UpdateProgress(displayProgress, ref completed, total, domain, progressLock);
+            }
+        }).ConfigureAwait(false);
+
+        if (displayProgress)
+        {
+            lock (progressLock)
+            {
+                Console.WriteLine();
+            }
+        }
+
+        return results.ToList();
+    }
+
+    private static void UpdateProgress(bool displayProgress, ref int completed, int total, string domain, object progressLock)
+    {
+        if (!displayProgress || total == 0)
+        {
+            return;
+        }
+
+        var current = Math.Min(Interlocked.Increment(ref completed), total);
+        var barWidth = 30;
+        var filled = (int)Math.Round(current / (double)total * barWidth);
+        var bar = new string('#', filled).PadRight(barWidth, '-');
+        var message = $"[{bar}] {current}/{total} {domain}";
+        var consoleWidth = 0;
+
+        try
+        {
+            consoleWidth = Console.WindowWidth;
+        }
+        catch
+        {
+            consoleWidth = 0;
+        }
+
+        lock (progressLock)
+        {
+            if (consoleWidth > 0)
+            {
+                var maxWidth = Math.Max(1, consoleWidth - 1);
+                if (message.Length > maxWidth)
+                {
+                    message = message[..maxWidth];
+                }
+                message = message.PadRight(maxWidth);
+                ProgressLineLength = maxWidth;
+            }
+            else
+            {
+                if (message.Length < ProgressLineLength)
+                {
+                    message = message.PadRight(ProgressLineLength);
+                }
+                ProgressLineLength = message.Length;
+            }
+
+            Console.Write($"\r{message}");
+        }
+    }
+
+    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, TimeSpan perQueryTimeout, TimeSpan perDomainTimeout, int retryMaxAttempts, int retryBaseDelayMilliseconds)
     {
         Console.Write("Enter the domain to check: ");
         var domainInput = Console.ReadLine();
@@ -170,10 +374,16 @@ public static class Program
         try
         {
             using var domainCts = new CancellationTokenSource(perDomainTimeout);
-            var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, domainCts.Token);
+            var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, retryMaxAttempts, retryBaseDelayMilliseconds, domainCts.Token, true, 1, 1);
             DisplayDomainResult(result, client);
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error checking domain {domain}: {ex.Message}");
+            Console.ResetColor();
+        }
+        catch (OperationCanceledException ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error checking domain {domain}: {ex.Message}");
@@ -457,7 +667,19 @@ public static class Program
         Console.WriteLine("---------------------");
     }
 
-    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, TimeSpan perQueryTimeout, TimeSpan perDomainTimeout, IConfiguration configuration)
+    private static async Task ProcessCsvFile(
+        LookupClient client,
+        List<string> targetNsServers,
+        List<string> targetARecords,
+        List<string> targetMxServers,
+        TimeSpan perQueryTimeout,
+        TimeSpan perDomainTimeout,
+        int retryMaxAttempts,
+        int retryBaseDelayMilliseconds,
+        int maxParallelism,
+        bool resumeEnabled,
+        string resumeCachePath,
+        IConfiguration configuration)
     {
         try
         {
@@ -482,68 +704,204 @@ public static class Program
                 return;
             }
 
-            Console.WriteLine($"Processing {domains.Count} domains...");
-            List<DomainCheckResult> results = new List<DomainCheckResult>();
-            int current = 0;
-            int total = domains.Count;
-
-            // Clear broken domains list before starting new batch
-            CheckAndMatchDomainHelper.ClearBrokenDomains();
-
-            foreach (var domain in domains)
+            var useResume = resumeEnabled;
+            if (resumeEnabled)
             {
-                current++;
-                Console.Write($"\rProcessing domain {current}/{total}: {domain.PadRight(30)}");
-
-                if (!TryNormalizeDomain(domain, out var normalizedDomain, out var errorMessage))
+                Console.WriteLine(Strings.ResumePrompt);
+                var resumeResponse = Console.ReadLine()?.Trim().ToUpperInvariant();
+                if (resumeResponse == "N")
                 {
-                    CheckAndMatchDomainHelper.BrokenDomains.Add(domain);
-                    results.Add(new DomainCheckResult
-                    {
-                        Domain = domain,
-                        IsBroken = true,
-                        ErrorReason = errorMessage
-                    });
-                    continue;
-                }
-                
-                try
-                {
-                    using var domainCts = new CancellationTokenSource(perDomainTimeout);
-                    var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, normalizedDomain, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, domainCts.Token);
-                    results.Add(result);
-                }
-                catch (Exception ex)
-                {
-                    // Create a result for the failed domain
-                    results.Add(new DomainCheckResult
-                    {
-                        Domain = domain,
-                        IsBroken = true,
-                        ErrorReason = $"Exception: {ex.Message}"
-                    });
+                    useResume = false;
+                    ClearResumeCache(resumeCachePath);
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine(Strings.ResumeCacheClearedMessage);
+                    Console.ResetColor();
                 }
             }
 
+            var processedDomains = useResume ? LoadResumeCache(resumeCachePath) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var remainingDomains = domains.Where(domain => !processedDomains.Contains(domain)).ToList();
+
+            if (useResume && remainingDomains.Count != domains.Count)
+            {
+                Console.WriteLine($"Skipping {domains.Count - remainingDomains.Count} domains already processed.");
+            }
+
+            if (useResume && remainingDomains.Count == 0)
+            {
+                Console.WriteLine(Strings.ResumeAllProcessedPrompt);
+                var resumeResponse = Console.ReadLine()?.Trim().ToUpperInvariant();
+                if (resumeResponse == "Y")
+                {
+                    remainingDomains = domains;
+                    ClearResumeCache(resumeCachePath);
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine(Strings.ResumeCacheClearedMessage);
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.WriteLine(Strings.NoDomainsToProcessMessage);
+                    return;
+                }
+            }
+
+            Console.WriteLine($"Processing {remainingDomains.Count} domains...");
+            // Clear broken domains list before starting new batch
+            CheckAndMatchDomainHelper.ClearBrokenDomains();
+
+            var results = await ProcessDomainBatchAsync(
+                remainingDomains,
+                client,
+                targetNsServers,
+                targetARecords,
+                targetMxServers,
+                perQueryTimeout,
+                perDomainTimeout,
+                retryMaxAttempts,
+                retryBaseDelayMilliseconds,
+                maxParallelism,
+                useResume,
+                resumeCachePath,
+                true).ConfigureAwait(false);
+
             Console.WriteLine();
-            Console.WriteLine($"Completed processing {domains.Count} domains.");
+            Console.WriteLine($"Completed processing {remainingDomains.Count} domains.");
 
             // Display summary of issues found
             CheckAndMatchDomainHelper.DisplayBrokenDomains();
 
             // Export results to CSV
             Console.WriteLine("Writing results to CSV...");
-            ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results);
+            ExportToCsvHelper.ExportResultsToCsv(outputFilePath, results, append: false);
             
             Console.ForegroundColor = ConsoleColor.Green;
             Console.WriteLine($"Results saved to: {outputFilePath}");
             Console.ResetColor();
+
+            var failedDomains = results.Where(result => result.IsBroken && !string.IsNullOrWhiteSpace(result.Domain))
+                .Select(result => result.Domain!)
+                .ToList();
+            if (failedDomains.Count > 0)
+            {
+                Console.WriteLine(Strings.RetryFailedPrompt);
+                var retryResponse = Console.ReadLine()?.Trim().ToUpperInvariant();
+                if (retryResponse == "Y")
+                {
+                    var retryResults = await ProcessDomainBatchAsync(
+                        failedDomains,
+                        client,
+                        targetNsServers,
+                        targetARecords,
+                        targetMxServers,
+                        perQueryTimeout,
+                        perDomainTimeout,
+                        retryMaxAttempts,
+                        retryBaseDelayMilliseconds,
+                        maxParallelism,
+                        false,
+                        resumeCachePath,
+                        true).ConfigureAwait(false);
+
+                    ExportToCsvHelper.ExportResultsToCsv(outputFilePath, retryResults, append: true);
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.WriteLine(string.Format(Strings.RetryAppendedMessageFormat, outputFilePath));
+                    Console.ResetColor();
+                }
+            }
         }
-        catch (Exception ex)
+        catch (IOException ex)
         {
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine($"Error processing CSV file: {ex.Message}");
             Console.ResetColor();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error processing CSV file: {ex.Message}");
+            Console.ResetColor();
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine($"Error processing CSV file: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    private static void ClearResumeCache(string cachePath)
+    {
+        try
+        {
+            if (File.Exists(cachePath))
+            {
+                File.Delete(cachePath);
+            }
+        }
+        catch (IOException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Unable to clear resume cache: {ex.Message}");
+            Console.ResetColor();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Unable to clear resume cache: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
+
+    private static HashSet<string> LoadResumeCache(string cachePath)
+    {
+        try
+        {
+            if (!File.Exists(cachePath))
+            {
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var lines = File.ReadAllLines(cachePath);
+            return new HashSet<string>(lines.Where(line => !string.IsNullOrWhiteSpace(line)).Select(line => line.Trim()), StringComparer.OrdinalIgnoreCase);
+        }
+        catch (IOException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Unable to read resume cache: {ex.Message}");
+            Console.ResetColor();
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine($"Unable to read resume cache: {ex.Message}");
+            Console.ResetColor();
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private static void AppendResumeCache(string cachePath, string domain, object resumeLock)
+    {
+        lock (resumeLock)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(cachePath) ?? Directory.GetCurrentDirectory());
+                File.AppendAllLines(cachePath, new[] { domain });
+            }
+            catch (IOException ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"Unable to update resume cache: {ex.Message}");
+                Console.ResetColor();
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"Unable to update resume cache: {ex.Message}");
+                Console.ResetColor();
+            }
         }
     }
 

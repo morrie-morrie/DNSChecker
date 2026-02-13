@@ -20,7 +20,7 @@ internal static class ExportToCsvHelper
     /// <param name="results">List of domain check results to export</param>
     /// <exception cref="ArgumentNullException">Thrown when results is null</exception>
     /// <exception cref="ArgumentException">Thrown when filePath is null or empty</exception>
-    public static void ExportResultsToCsv(string filePath, List<DomainCheckResult> results)
+    public static void ExportResultsToCsv(string filePath, List<DomainCheckResult> results, bool append)
     {
         if (string.IsNullOrWhiteSpace(filePath))
             throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
@@ -37,12 +37,16 @@ internal static class ExportToCsvHelper
                 Directory.CreateDirectory(directory);
             }
 
-            using (var writer = new StreamWriter(filePath))
+            var fileExists = File.Exists(filePath);
+            using (var writer = new StreamWriter(filePath, append))
             using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
             {
                 // Write header with custom names if needed
-                csv.WriteHeader<DomainExportModel>();
-                csv.NextRecord();
+                if (!append || !fileExists)
+                {
+                    csv.WriteHeader<DomainExportModel>();
+                    csv.NextRecord();
+                }
 
                 // Write records
                 foreach (var result in results)
