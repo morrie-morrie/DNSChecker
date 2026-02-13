@@ -71,9 +71,6 @@ internal static class ExportToCsvHelper
                     csv.NextRecord();
                 }
 
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"Successfully wrote {results.Count} results to {filePath}");
-                Console.ResetColor();
             }
         }
         catch (Exception ex)

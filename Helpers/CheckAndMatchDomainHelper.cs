@@ -249,6 +249,11 @@ internal static class CheckAndMatchDomainHelper
             Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}. Status: {errorCode}", queryLabel, queryName, ex.Code);
             return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
         }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}.", queryLabel, queryName);
+            return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+        }
     }
 
     private readonly record struct QueryResult(IDnsQueryResponse? Response, string? Error);

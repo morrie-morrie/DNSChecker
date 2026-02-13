@@ -47,7 +47,13 @@ public static class Program
             Console.WriteLine($"Do you want to use a different DNS server? (Y/N)");
             string? response = Console.ReadLine()?.Trim().ToUpper();
 
-            var dnsServerAddress = IPAddress.Parse(dnsServerAddressString);
+            if (!IPAddress.TryParse(dnsServerAddressString, out IPAddress? dnsServerAddress))
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine("Invalid DNS server address in configuration. Falling back to 8.8.8.8.");
+                Console.ResetColor();
+                dnsServerAddress = IPAddress.Parse("8.8.8.8");
+            }
 
             if (response == "Y")
             {
@@ -74,6 +80,10 @@ public static class Program
             if (perDomainTimeoutSeconds <= 0)
             {
                 perDomainTimeoutSeconds = perQueryTimeoutSeconds + 2;
+            }
+            if (perDomainTimeoutSeconds < perQueryTimeoutSeconds)
+            {
+                perDomainTimeoutSeconds = perQueryTimeoutSeconds;
             }
 
             var perQueryTimeout = TimeSpan.FromSeconds(perQueryTimeoutSeconds);
@@ -174,7 +184,15 @@ public static class Program
     private static void DisplayDomainResult(DomainCheckResult result, LookupClient client)
     {
         // Helper for wrapping long lines
-        int wrapWidth = Math.Min(Console.WindowWidth, 120);
+        var wrapWidth = 120;
+        try
+        {
+            wrapWidth = Math.Min(Console.WindowWidth, 120);
+        }
+        catch
+        {
+            wrapWidth = 120;
+        }
         void WriteWrapped(string prefix, string text)
         {
             if (string.IsNullOrEmpty(text)) return;
@@ -479,6 +497,7 @@ public static class Program
 
                 if (!TryNormalizeDomain(domain, out var normalizedDomain, out var errorMessage))
                 {
+                    CheckAndMatchDomainHelper.BrokenDomains.Add(domain);
                     results.Add(new DomainCheckResult
                     {
                         Domain = domain,

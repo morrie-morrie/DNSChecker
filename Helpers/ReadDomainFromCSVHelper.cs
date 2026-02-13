@@ -65,9 +65,6 @@ internal static class ReadDomainFromCsvHelper
         }
         catch (Exception ex) when (ex is not FileNotFoundException) // We already handle FileNotFoundException above
         {
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"Error reading file: {ex.Message}");
-            Console.ResetColor();
             throw;
         }
 
