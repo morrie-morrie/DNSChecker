@@ -4,6 +4,7 @@ using Serilog;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DnsChecker.Helpers;
@@ -28,18 +29,23 @@ internal static class CheckAndMatchDomainHelper
     /// <param name="targetNs">List of target nameserver hostnames to match against</param>
     /// <param name="targetA">List of target IP addresses to match against</param>
     /// <param name="targetMx">Optional list of target MX servers to match against</param>
+    /// <param name="perQueryTimeout">Timeout applied to each DNS query</param>
+    /// <param name="cancellationToken">Cancellation token for the overall domain check</param>
     /// <returns>A DomainCheckResult containing the detailed results of the domain check</returns>
     public static async Task<DomainCheckResult> CheckAndMatchDomain(
         LookupClient client, 
         string domain, 
         List<string> targetNs, 
         List<string> targetA, 
-        List<string>? targetMx = null)
+        List<string>? targetMx,
+        TimeSpan perQueryTimeout,
+        CancellationToken cancellationToken)
     {
-        if (client == null) throw new ArgumentNullException(nameof(client));
+        ArgumentNullException.ThrowIfNull(client);
         if (string.IsNullOrWhiteSpace(domain)) throw new ArgumentException("Domain cannot be empty", nameof(domain));
-        if (targetNs == null) throw new ArgumentNullException(nameof(targetNs));
-        if (targetA == null) throw new ArgumentNullException(nameof(targetA));
+        ArgumentNullException.ThrowIfNull(targetNs);
+        ArgumentNullException.ThrowIfNull(targetA);
+        if (perQueryTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(perQueryTimeout));
 
         domain = domain.Trim().ToLowerInvariant();
         DisplayCurrentDomain(domain);
@@ -50,51 +56,78 @@ internal static class CheckAndMatchDomainHelper
             NsRecords = new List<string>(),
             ARecords = new List<string>(),
             MxRecords = new List<string>(),
+            QueryErrors = new List<string>(),
             IsBroken = false
         };
 
         try
         {
             // Execute DNS queries in parallel for better performance
-            var queries = new Task<IDnsQueryResponse>[] {
-                client.QueryAsync(domain, QueryType.NS),
-                client.QueryAsync(domain, QueryType.A),
-                client.QueryAsync(domain, QueryType.MX),
-                client.QueryAsync(domain, QueryType.TXT),
-                client.QueryAsync($"_dmarc.{domain}", QueryType.TXT)
+            var queries = new[]
+            {
+                ExecuteQueryAsync(client, domain, QueryType.NS, "NS", perQueryTimeout, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.A, "A", perQueryTimeout, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.MX, "MX", perQueryTimeout, cancellationToken),
+                ExecuteQueryAsync(client, domain, QueryType.TXT, "SPF", perQueryTimeout, cancellationToken),
+                ExecuteQueryAsync(client, $"_dmarc.{domain}", QueryType.TXT, "DMARC", perQueryTimeout, cancellationToken)
             };
 
             // Wait for all queries to complete
-            var responses = await Task.WhenAll(queries);
+            var responses = await Task.WhenAll(queries).ConfigureAwait(false);
 
-            var nsResponse = responses[0];
-            var aResponse = responses[1];
-            var mxResponse = responses[2];
-            var txtResponse = responses[3];
-            var dmarcResponse = responses[4];
+            foreach (var response in responses)
+            {
+                if (!string.IsNullOrWhiteSpace(response.Error))
+                {
+                    result.QueryErrors.Add(response.Error);
+                }
+            }
+
+            var nsResponse = responses[0].Response;
+            var aResponse = responses[1].Response;
+            var mxResponse = responses[2].Response;
+            var txtResponse = responses[3].Response;
+            var dmarcResponse = responses[4].Response;
 
             // Process SPF records
-            var spfParts = txtResponse.Answers.TxtRecords()
-                .SelectMany(txt => txt.Text)
-                .Where(txt => txt.StartsWith("v=spf1", StringComparison.OrdinalIgnoreCase) || 
-                              txt.Contains("include:", StringComparison.OrdinalIgnoreCase) || 
-                              txt.Contains("ip4:", StringComparison.OrdinalIgnoreCase) || 
-                              txt.Contains("ip6:", StringComparison.OrdinalIgnoreCase) || 
-                              txt.EndsWith("-all", StringComparison.OrdinalIgnoreCase) || 
-                              txt.EndsWith("~all", StringComparison.OrdinalIgnoreCase) || 
-                              txt.EndsWith("+all", StringComparison.OrdinalIgnoreCase) || 
-                              txt.EndsWith("?all", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            if (txtResponse != null)
+            {
+                var spfParts = txtResponse.Answers.TxtRecords()
+                    .SelectMany(txt => txt.Text)
+                    .Where(txt => txt.StartsWith("v=spf1", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.Contains("include:", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.Contains("ip4:", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.Contains("ip6:", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.EndsWith("-all", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.EndsWith("~all", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.EndsWith("+all", StringComparison.OrdinalIgnoreCase) ||
+                                  txt.EndsWith("?all", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
-            result.SpfRecord = string.Join("", spfParts);
-            result.SpfValid = !string.IsNullOrEmpty(result.SpfRecord) && 
-                             (result.SpfRecord.EndsWith("-all", StringComparison.OrdinalIgnoreCase) || 
-                              result.SpfRecord.EndsWith("~all", StringComparison.OrdinalIgnoreCase));
+                result.SpfRecord = string.Join("", spfParts);
+                result.SpfValid = !string.IsNullOrEmpty(result.SpfRecord) &&
+                                 (result.SpfRecord.EndsWith("-all", StringComparison.OrdinalIgnoreCase) ||
+                                  result.SpfRecord.EndsWith("~all", StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                result.SpfRecord = null;
+                result.SpfValid = false;
+            }
 
             // Process DMARC record
-            var dmarcTxt = dmarcResponse.Answers.TxtRecords().SelectMany(txt => txt.Text).FirstOrDefault(t => t.StartsWith("v=DMARC1", StringComparison.OrdinalIgnoreCase));
-            result.DmarcRecord = dmarcTxt;
-            result.DmarcValid = !string.IsNullOrEmpty(dmarcTxt) && dmarcTxt.Contains("p=", StringComparison.OrdinalIgnoreCase);
+            if (dmarcResponse != null)
+            {
+                var dmarcTxt = dmarcResponse.Answers.TxtRecords().SelectMany(txt => txt.Text)
+                    .FirstOrDefault(t => t.StartsWith("v=DMARC1", StringComparison.OrdinalIgnoreCase));
+                result.DmarcRecord = dmarcTxt;
+                result.DmarcValid = !string.IsNullOrEmpty(dmarcTxt) && dmarcTxt.Contains("p=", StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                result.DmarcRecord = null;
+                result.DmarcValid = false;
+            }
 
             // Process DKIM records (try common selectors)
             var commonSelectors = new[] { "default", "selector1", "selector2", "dkim", "google", "mail", "smtp", "key1", "key2" };
@@ -103,41 +136,56 @@ internal static class CheckAndMatchDomainHelper
             var dkimSelectorResults = new Dictionary<string, (string Value, bool IsValid)>();
             foreach (var selector in commonSelectors)
             {
-                try
+                var dkimResult = await ExecuteQueryAsync(
+                    client,
+                    $"{selector}._domainkey.{domain}",
+                    QueryType.TXT,
+                    $"DKIM ({selector})",
+                    perQueryTimeout,
+                    cancellationToken).ConfigureAwait(false);
+
+                if (!string.IsNullOrWhiteSpace(dkimResult.Error))
                 {
-                    var dkimQuery = await client.QueryAsync($"{selector}._domainkey.{domain}", QueryType.TXT);
-                    foreach (var txt in dkimQuery.Answers.TxtRecords())
+                    result.QueryErrors.Add(dkimResult.Error);
+                    continue;
+                }
+
+                var dkimQuery = dkimResult.Response;
+                if (dkimQuery == null)
+                {
+                    continue;
+                }
+
+                foreach (var txt in dkimQuery.Answers.TxtRecords())
+                {
+                    foreach (var text in txt.Text)
                     {
-                        foreach (var text in txt.Text)
+                        if (text.StartsWith("v=DKIM1", StringComparison.OrdinalIgnoreCase))
                         {
-                            if (text.StartsWith("v=DKIM1", StringComparison.OrdinalIgnoreCase))
-                            {
-                                dkimSelectors.Add(selector);
-                                bool isValid = text.Contains("p=", StringComparison.OrdinalIgnoreCase);
-                                if (isValid) dkimValid = true;
-                                dkimSelectorResults[selector] = (text, isValid);
-                            }
+                            dkimSelectors.Add(selector);
+                            bool isValid = text.Contains("p=", StringComparison.OrdinalIgnoreCase);
+                            if (isValid) dkimValid = true;
+                            dkimSelectorResults[selector] = (text, isValid);
                         }
                     }
                 }
-                catch { /* Ignore DNS errors for missing selectors */ }
             }
             result.DkimRecords = dkimSelectors;
             result.DkimValid = dkimValid;
             result.DkimSelectorResults = dkimSelectorResults;
 
             // Process records
-            result.NsRecords = nsResponse.Answers.NsRecords()
+            result.NsRecords = nsResponse?.Answers.NsRecords()
                 .Select(r => r.NSDName.Value.TrimEnd('.').ToLowerInvariant())
-                .ToList();
+                .ToList() ?? new List<string>();
             
-            result.ARecords = aResponse.Answers.ARecords()
+            result.ARecords = aResponse?.Answers.ARecords()
                 .Select(r => r.Address.ToString())
-                .ToList();
+                .ToList() ?? new List<string>();
             
-            result.MxRecords = mxResponse.Answers.MxRecords()
+            result.MxRecords = mxResponse?.Answers.MxRecords()
                 .Select(r => r.Exchange.Value.ToLowerInvariant().TrimEnd('.'))
-                .ToList();
+                .ToList() ?? new List<string>();
 
             // Check for matches with target servers
             result.NsMatch = targetNs.Any(ns => result.NsRecords.Contains(ns.ToLowerInvariant()));
@@ -169,15 +217,41 @@ internal static class CheckAndMatchDomainHelper
             result.ErrorReason = "DNS query timed out";
             BrokenDomains.Add(domain);
         }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Unexpected error occurred for {domain}", domain);
-            result.IsBroken = true;
-            result.ErrorReason = $"Unexpected error: {ex.Message}";
-            BrokenDomains.Add(domain);
-        }
         return result;
     }
+
+    private static async Task<QueryResult> ExecuteQueryAsync(
+        LookupClient client,
+        string queryName,
+        QueryType queryType,
+        string queryLabel,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        var queryTask = client.QueryAsync(queryName, queryType);
+        var delayTask = Task.Delay(timeout, cancellationToken);
+
+        var completedTask = await Task.WhenAny(queryTask, delayTask).ConfigureAwait(false);
+        if (completedTask == delayTask)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Log.Warning("DNS query timed out for {queryLabel} on {domain}.", queryLabel, queryName);
+            return new QueryResult(null, $"{queryLabel} query timed out");
+        }
+
+        try
+        {
+            var response = await queryTask.ConfigureAwait(false);
+            return new QueryResult(response, null);
+        }
+        catch (DnsResponseException ex)
+        {
+            Log.Warning(ex, "DNS query failed for {queryLabel} on {domain}. Status: {errorCode}", queryLabel, queryName, ex.Code);
+            return new QueryResult(null, $"{queryLabel} query failed: {ex.Message}");
+        }
+    }
+
+    private readonly record struct QueryResult(IDnsQueryResponse? Response, string? Error);
 
     /// <summary>
     /// Displays the current domain being checked in the console.

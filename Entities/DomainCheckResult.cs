@@ -68,6 +68,16 @@ internal class DomainCheckResult
     /// Gets or sets the reason for DNS query failure when IsBroken is true.
     /// </summary>
     public string? ErrorReason { get; set; }
+
+    /// <summary>
+    /// Gets or sets per-query error messages when individual DNS queries fail or time out.
+    /// </summary>
+    public List<string>? QueryErrors { get; set; }
+
+    /// <summary>
+    /// Gets a semicolon-separated string representation of per-query errors.
+    /// </summary>
+    public string QueryErrorsString => string.Join("; ", QueryErrors ?? new List<string>());
     
     /// <summary>
     /// Gets or sets the SPF record for the domain.

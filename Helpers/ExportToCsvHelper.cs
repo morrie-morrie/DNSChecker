@@ -58,6 +58,7 @@ internal static class ExportToCsvHelper
                         MxRecords = result.MxRecordsString,
                         IsBroken = result.IsBroken,
                         ErrorReason = result.ErrorReason,
+                        QueryErrors = result.QueryErrorsString,
                         SpfRecord = result.SpfRecord,
                         SpfValid = result.SpfValid,
                         DmarcRecord = result.DmarcRecord,
@@ -98,6 +99,7 @@ internal static class ExportToCsvHelper
         public string? MxRecords { get; set; }
         public bool IsBroken { get; set; }
         public string? ErrorReason { get; set; }
+        public string? QueryErrors { get; set; }
         public string? SpfRecord { get; set; }
         public bool SpfValid { get; set; }
         public string? DmarcRecord { get; set; }

@@ -9,6 +9,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace DnsChecker;
@@ -63,10 +64,25 @@ public static class Program
                 }
             }
 
+            var perQueryTimeoutSeconds = configuration.GetValue("Timeouts:PerQuerySeconds", 5);
+            if (perQueryTimeoutSeconds <= 0)
+            {
+                perQueryTimeoutSeconds = 5;
+            }
+
+            var perDomainTimeoutSeconds = configuration.GetValue("Timeouts:PerDomainSeconds", perQueryTimeoutSeconds + 2);
+            if (perDomainTimeoutSeconds <= 0)
+            {
+                perDomainTimeoutSeconds = perQueryTimeoutSeconds + 2;
+            }
+
+            var perQueryTimeout = TimeSpan.FromSeconds(perQueryTimeoutSeconds);
+            var perDomainTimeout = TimeSpan.FromSeconds(perDomainTimeoutSeconds);
+
             // Set up DNS client with timeout
             var clientOptions = new LookupClientOptions(dnsServerAddress)
             {
-                Timeout = TimeSpan.FromSeconds(5), // Slightly longer timeout
+                Timeout = perQueryTimeout,
                 UseCache = true,
                 Retries = 2
             };
@@ -98,11 +114,11 @@ public static class Program
 
                 if (string.IsNullOrEmpty(choice) || choice == "i")
                 {
-                    await CheckIndividualDomain(client, targetNsServers, targetARecords, targetMxServers);
+                    await CheckIndividualDomain(client, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, perDomainTimeout);
                 }
                 else if (choice == "d")
                 {
-                    await ProcessCsvFile(client, targetNsServers, targetARecords, targetMxServers, configuration);
+                    await ProcessCsvFile(client, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, perDomainTimeout, configuration);
                 }
                 else if (choice == "q")
                 {
@@ -126,7 +142,7 @@ public static class Program
         }
     }
 
-    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers)
+    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, TimeSpan perQueryTimeout, TimeSpan perDomainTimeout)
     {
         Console.Write("Enter the domain to check: ");
         var domainInput = Console.ReadLine();
@@ -143,7 +159,8 @@ public static class Program
         
         try
         {
-            var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers);
+            using var domainCts = new CancellationTokenSource(perDomainTimeout);
+            var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, domainCts.Token);
             DisplayDomainResult(result, client);
         }
         catch (Exception ex)
@@ -188,6 +205,20 @@ public static class Program
             Console.WriteLine($"DNS Error: {result.ErrorReason ?? "Unknown error"}");
             Console.ResetColor();
             return;
+        }
+
+        if (result.QueryErrors != null && result.QueryErrors.Count > 0)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("Query issues:");
+            Console.ResetColor();
+            foreach (var error in result.QueryErrors)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"  {error}");
+                Console.ResetColor();
+            }
+            Console.WriteLine();
         }
 
         // NS Records
@@ -408,7 +439,7 @@ public static class Program
         Console.WriteLine("---------------------");
     }
 
-    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, IConfiguration configuration)
+    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, TimeSpan perQueryTimeout, TimeSpan perDomainTimeout, IConfiguration configuration)
     {
         try
         {
@@ -459,7 +490,8 @@ public static class Program
                 
                 try
                 {
-                    var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, normalizedDomain, targetNsServers, targetARecords, targetMxServers);
+                    using var domainCts = new CancellationTokenSource(perDomainTimeout);
+                    var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, normalizedDomain, targetNsServers, targetARecords, targetMxServers, perQueryTimeout, domainCts.Token);
                     results.Add(result);
                 }
                 catch (Exception ex)
