@@ -59,7 +59,11 @@ internal static class ExportToCsvHelper
                         IsBroken = result.IsBroken,
                         ErrorReason = result.ErrorReason,
                         SpfRecord = result.SpfRecord,
-                        SpfValid = result.SpfValid
+                        SpfValid = result.SpfValid,
+                        DmarcRecord = result.DmarcRecord,
+                        DmarcValid = result.DmarcValid,
+                        DkimValid = result.DkimValid,
+                        DkimRecords = result.DkimRecords != null ? string.Join("; ", result.DkimRecords) : null
                     };
                     
                     csv.WriteRecord(exportModel);
@@ -96,5 +100,9 @@ internal static class ExportToCsvHelper
         public string? ErrorReason { get; set; }
         public string? SpfRecord { get; set; }
         public bool SpfValid { get; set; }
+        public string? DmarcRecord { get; set; }
+        public bool DmarcValid { get; set; }
+        public string? DkimRecords { get; set; }
+        public bool DkimValid { get; set; }
     }
 }

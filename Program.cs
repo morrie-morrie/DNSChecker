@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -97,11 +98,11 @@ public static class Program
 
                 if (string.IsNullOrEmpty(choice) || choice == "i")
                 {
-                    await CheckIndividualDomain(client, targetNsServers, targetARecords);
+                    await CheckIndividualDomain(client, targetNsServers, targetARecords, targetMxServers);
                 }
                 else if (choice == "d")
                 {
-                    await ProcessCsvFile(client, targetNsServers, targetARecords, configuration);
+                    await ProcessCsvFile(client, targetNsServers, targetARecords, targetMxServers, configuration);
                 }
                 else if (choice == "q")
                 {
@@ -125,14 +126,16 @@ public static class Program
         }
     }
 
-    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords)
+    private static async Task CheckIndividualDomain(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers)
     {
         Console.Write("Enter the domain to check: ");
-        var domain = Console.ReadLine()?.Trim();
+        var domainInput = Console.ReadLine();
 
-        if (string.IsNullOrWhiteSpace(domain))
+        if (!TryNormalizeDomain(domainInput, out var domain, out var errorMessage))
         {
-            Console.WriteLine("No domain entered.");
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.WriteLine(errorMessage);
+            Console.ResetColor();
             return;
         }
 
@@ -140,7 +143,6 @@ public static class Program
         
         try
         {
-            var targetMxServers = new List<string> { "mail.protection.outlook.com", "mx1-us1.ppe-hosted.com", "mx2-us1.ppe-hosted.com" };
             var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers);
             DisplayDomainResult(result, client);
         }
@@ -406,7 +408,7 @@ public static class Program
         Console.WriteLine("---------------------");
     }
 
-    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, IConfiguration configuration)
+    private static async Task ProcessCsvFile(LookupClient client, List<string> targetNsServers, List<string> targetARecords, List<string> targetMxServers, IConfiguration configuration)
     {
         try
         {
@@ -439,16 +441,25 @@ public static class Program
             // Clear broken domains list before starting new batch
             CheckAndMatchDomainHelper.ClearBrokenDomains();
 
-            var targetMxServers = new List<string> { "mail.protection.outlook.com", "mx1-us1.ppe-hosted.com", "mx2-us1.ppe-hosted.com" };
-
             foreach (var domain in domains)
             {
                 current++;
                 Console.Write($"\rProcessing domain {current}/{total}: {domain.PadRight(30)}");
+
+                if (!TryNormalizeDomain(domain, out var normalizedDomain, out var errorMessage))
+                {
+                    results.Add(new DomainCheckResult
+                    {
+                        Domain = domain,
+                        IsBroken = true,
+                        ErrorReason = errorMessage
+                    });
+                    continue;
+                }
                 
                 try
                 {
-                    var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, domain, targetNsServers, targetARecords, targetMxServers);
+                    var result = await CheckAndMatchDomainHelper.CheckAndMatchDomain(client, normalizedDomain, targetNsServers, targetARecords, targetMxServers);
                     results.Add(result);
                 }
                 catch (Exception ex)
@@ -483,5 +494,44 @@ public static class Program
             Console.WriteLine($"Error processing CSV file: {ex.Message}");
             Console.ResetColor();
         }
+    }
+
+    private static bool TryNormalizeDomain(string? input, out string normalizedDomain, out string errorMessage)
+    {
+        normalizedDomain = string.Empty;
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            errorMessage = "No domain entered.";
+            return false;
+        }
+
+        var trimmed = input.Trim().TrimEnd('.');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            errorMessage = "No domain entered.";
+            return false;
+        }
+
+        string asciiDomain;
+        try
+        {
+            asciiDomain = new IdnMapping().GetAscii(trimmed);
+        }
+        catch (ArgumentException)
+        {
+            errorMessage = "Invalid domain format.";
+            return false;
+        }
+
+        if (Uri.CheckHostName(asciiDomain) != UriHostNameType.Dns)
+        {
+            errorMessage = "Invalid domain format.";
+            return false;
+        }
+
+        normalizedDomain = asciiDomain.ToLowerInvariant();
+        return true;
     }
 }
